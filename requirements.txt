@@ -5,3 +5,4 @@ beautifulsoup4
 pytz
 st-gsheets-connection
 google-generativeai
+google-genai
