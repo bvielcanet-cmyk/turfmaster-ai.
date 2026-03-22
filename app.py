@@ -1,0 +1,156 @@
+import streamlit as st
+import pandas as pd
+import re
+import requests
+import json
+from datetime import datetime
+
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="TurfMaster 2.5 : Expert Dashboard", page_icon="🏇", layout="wide")
+
+# CSS : Fond Gris Clair, Texte Noir, Metrics Contrastées
+st.markdown("""
+<style>
+    [data-testid="stMetricValue"] { color: #000000 !important; font-weight: 800 !important; font-size: 19px !important; }
+    [data-testid="stMetricLabel"] { color: #1a1a1a !important; font-weight: 700 !important; font-size: 14px !important; }
+    
+    /* Bulles en GRIS CLAIR */
+    [data-testid="stMetric"] { 
+        background-color: #f0f2f6 !important; 
+        padding: 12px !important; 
+        border-radius: 10px !important; 
+        border: 1px solid #d1d6db !important;
+    }
+    .stButton>button { width: 100%; border-radius: 20px; font-weight: bold; background-color: #000000; color: white; }
+    .stMarkdown h3 { color: #000000; margin-bottom: 10px; }
+</style>
+""", unsafe_allow_html=True)
+
+if "gemini" in st.secrets:
+    API_KEY = st.secrets["gemini"]["api_key"]
+else:
+    st.error("❌ Clé API absente.")
+    st.stop()
+
+# --- 2. FONCTIONS DE PARSING ---
+
+def extraire_data_expert(texte):
+    lignes = texte.strip().split('\n')
+    data = []
+    for ligne in lignes:
+        # On capte le numéro au début
+        num = re.findall(r'^\d{1,2}', ligne.strip())
+        # On capte le nom en MAJUSCULES
+        noms_trouves = re.findall(r'[A-Z]{4,}', ligne)
+        # On capte la musique
+        musique = re.findall(r'\b\d[admp]\b|\b[A-Z]D\b', ligne)
+        
+        if noms_trouves:
+            nom_cheval = noms_trouves[0]
+            numero = num[0] if num else "?"
+            
+            # Extraction du Jockey
+            parts = ligne.split(nom_cheval)
+            jockey = "Inconnu"
+            if len(parts) > 1:
+                suite = parts[1].strip()
+                noms_propres = re.findall(r'^[A-Z][a-z]+', suite)
+                if noms_propres:
+                    jockey = noms_propres[0]
+
+            data.append({
+                "ID": f"{numero} - {nom_cheval}", # Formatage strict N° - NOM
+                "Jockey": jockey,
+                "Musique": " ".join(musique) if musique else "N/A"
+            })
+    return pd.DataFrame(data)
+
+def simulation_ultra_pro(df, hippo, discipline, capital):
+    partants_str = "\n".join([f"{row['ID']} (Jockey: {row['Jockey']} | Musique: {row['Musique']})" for _, row in df.iterrows()])
+    
+    prompt = f"""Expert Turf 2026. Hippodrome: {hippo} | Discipline: {discipline}.
+    
+    PARTANTS (DÉJÀ FORMATÉS N° - NOM) :
+    {partants_str}
+
+    MISSION :
+    1. Analyse météo et distance pour {hippo}.
+    2. Établis l'ordre d'arrivée (Top 5). 
+    3. Garde impérativement le format "N° - NOM" dans tes réponses.
+    4. Inclus un Outsider avec son % de probabilité s'il est détecté.
+
+    RÉPONDS UNIQUEMENT EN JSON :
+    {{
+        "meteo": "🌦️", "terrain": "Bon", "dist": "2700m",
+        "podium": [
+            {{"label": "🥇 1er", "nom": "N° - NOM", "prob": "35%", "note": "Favori"}},
+            {{"label": "🥈 2ème", "nom": "N° - NOM", "prob": "20%", "note": "Régulier"}},
+            {{"label": "🥉 3ème", "nom": "N° - NOM", "prob": "15%", "note": "Piste OK"}},
+            {{"label": "🔥 OUTSIDER", "nom": "N° - NOM", "prob": "12%", "note": "Value Bet"}},
+            {{"label": "🏇 5ème", "nom": "N° - NOM", "prob": "8%", "note": "Engagement"}}
+        ],
+        "pari": "Trio Combiné", "ticket": "X - Y - Z - W", "mise": "24.00", "outsider_top": "N° - NOM (Proba%)"
+    }}
+    """
+    
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
+    
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        return response.json()['candidates'][0]['content']['parts'][0]['text']
+    except: return None
+
+# --- 3. INTERFACE ---
+st.title("🏇 TurfMaster 2.5 : Expert & Numéros")
+
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    hippo_input = st.text_input("Hippodrome", value="Vincennes")
+    discipline = st.selectbox("Discipline", ["Trot Attelé", "Trot Monté", "Plat", "Obstacles"])
+    st.divider()
+    capital = st.number_input("Capital (€)", value=1000)
+    if st.button("🧹 Reset"): st.rerun()
+
+st.markdown("### 📝 Partants (Format: N° NOM Jockey Musique)")
+txt_in = st.text_area("", height=150, placeholder="Ex: 12 FAKIR Raffin 1a 2a")
+
+if st.button("🚀 ANALYSER LA COURSE"):
+    df = extraire_data_expert(txt_in)
+    if not df.empty:
+        with st.spinner(f"📡 Analyse en cours pour {hippo_input}..."):
+            raw = simulation_ultra_pro(df, hippo_input, discipline, capital)
+            if raw:
+                try:
+                    res = json.loads(re.sub(r'```json\n|```', '', raw))
+                    
+                    st.divider()
+                    # 1. PARAMÈTRES DÉTECTÉS
+                    st.markdown("### 📊 Conditions détectées")
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Météo", res['meteo'])
+                    m2.metric("Piste", res['terrain'])
+                    m3.metric("Distance", res['dist'])
+
+                    # 2. PODIUM (Numéros Inclus)
+                    st.markdown("### 🏆 Top 5 & Probabilités")
+                    cols = st.columns(5)
+                    for i, p in enumerate(res['podium']):
+                        with cols[i]:
+                            st.metric(p['label'], p['nom'], p['prob'])
+                            st.caption(f"💡 {p['note']}")
+
+                    # 3. STRATÉGIE (Numéros Inclus)
+                    st.divider()
+                    l1, l2 = st.columns([2, 1])
+                    with l1:
+                        st.subheader("🎫 Ticket Platinum")
+                        st.success(f"**Pari : {res['pari']}** | {res['ticket']} | Mise : **{res['mise']} €**")
+                    with l2:
+                        st.subheader("🕵️ Outsider Détecté")
+                        st.warning(f"**{res['outsider_top']}**")
+                except: st.error("L'IA a fait une erreur de lecture. Réessayez.")
+    else: st.error("Veuillez saisir des partants valides.")
+
+st.divider()
+st.caption("Fonds Gris Clair #f0f2f6 | Texte Noir Intense | Numéros Intégrés")
