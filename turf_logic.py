@@ -61,7 +61,8 @@ def _fiche(numero, nom, suite, jockey=None, annees=False):
         morceaux.append(jockey.replace(" - ", " / "))
     if cote is not None:
         morceaux.append(f"cote {cote:g}")
-    return {"FULL_ID": f"{numero} - {nom}", "NUM": numero, "COTE": cote, "Info": " | ".join(morceaux)}
+    return {"FULL_ID": f"{numero} - {nom}", "NUM": numero, "NOM": nom, "COTE": cote,
+            "MUSIQUE": " ".join(musique), "Info": " | ".join(morceaux)}
 
 
 def _lire_fiches(lignes):
@@ -119,20 +120,142 @@ def extraire_data_pro(texte):
     return pd.DataFrame(data), ignorees
 
 
-# --- Mise ----------------------------------------------------------------
 
-POURCENTAGE_MISE = {"Prudent": 0.01, "Équilibré": 0.02, "Offensif": 0.04}
+# --- Discipline ----------------------------------------------------------
+
+LETTRES_DISCIPLINE = {"a": "Trot", "m": "Trot", "p": "Plat", "h": "Obstacles", "s": "Obstacles", "c": "Obstacles"}
+DISCIPLINES = ["Trot", "Plat", "Obstacles"]
+
+
+def detecter_discipline(df):
+    """Discipline la plus fréquente dans les musiques (a/m = trot, p = plat, h/s/c = obstacles), ou None."""
+    compte = {}
+    if df.empty or "MUSIQUE" not in df:
+        return None
+    for musique in df["MUSIQUE"]:
+        for lettre in re.findall(r'(?:\d|[TADR])([admphsc])\b', musique or ""):
+            d = LETTRES_DISCIPLINE[lettre]
+            compte[d] = compte.get(d, 0) + 1
+    return max(compte, key=compte.get) if compte else None
+
+
+# --- Valeur du pari et décision ------------------------------------------
+#
+# Un pari n'est conseillé que si son intérêt est MESURABLE : il faut la cote de
+# chaque partant.
+#   1. Probabilité retenue = moyenne entre l'estimation de l'IA et celle du marché
+#      (les cotes). L'IA peut se tromper, surtout sur les petites probabilités :
+#      on ne lui fait confiance qu'à moitié (CONFIANCE_IA).
+#   2. Gain espéré pour 1 € misé en Simple Gagnant = probabilité retenue × cote − 1.
+#   3. Pari conseillé seulement si le gain espéré, la probabilité et la cote
+#      respectent les seuils du profil.
+#   4. Mise = fraction du critère de Kelly, plafonnée en % du capital.
+
+CONFIANCE_IA = 0.5
+
+PROFILS = {
+    "Prudent":   {"ev_min": 0.10, "p_min": 0.30, "cote_max": 4,  "kelly": 0.25, "plafond": 0.01},
+    "Équilibré": {"ev_min": 0.08, "p_min": 0.15, "cote_max": 10, "kelly": 0.25, "plafond": 0.02},
+    "Offensif":  {"ev_min": 0.05, "p_min": 0.08, "cote_max": 25, "kelly": 0.50, "plafond": 0.04},
+}
+
+
+def decrire_profil(profil):
+    r = PROFILS[profil]
+    return (f"gain espéré ≥ {r['ev_min']:+.0%}, probabilité ≥ {r['p_min']:.0%}, "
+            f"cote ≤ {r['cote_max']}, mise ≤ {r['plafond']:.0%} du capital")
 
 TYPES_PARI = {
-    "Prudent": "un pari simple : Simple Placé ou Couplé Placé",
+    "Prudent": "un Simple Placé ou un Couplé Placé",
     "Équilibré": "un Couplé Gagnant, un Trio ou un Couplé Placé",
     "Offensif": "un Trio Ordre, un Quarté+ ou un Quinté+ (si la course le permet)",
 }
 
 
-def calculer_mise(capital, profil):
-    """Mise fixe en pourcentage du capital selon le profil (1 %, 2 % ou 4 %)."""
-    return round(max(float(capital), 0) * POURCENTAGE_MISE[profil], 2)
+def probas_marche(df):
+    """Probabilités de victoire selon les cotes, marge des opérateurs retirée.
+    Retourne None si une cote manque (le marché n'est alors pas mesurable)."""
+    if df.empty or df["COTE"].isna().any():
+        return None
+    inverses = {row["NUM"]: 1 / row["COTE"] for _, row in df.iterrows() if row["COTE"] > 0}
+    if len(inverses) != len(df):
+        return None
+    total = sum(inverses.values())
+    return {num: inv / total for num, inv in inverses.items()}
+
+
+def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
+    """Décide s'il faut jouer.
+
+    chevaux : sortie de valider_reponse()['chevaux'] (num, p entre 0 et 1).
+    budget_restant : pertes encore autorisées sur la période (None = pas de limite).
+    Retourne {"jouer", "raison", "pari", "analyse"}.
+    """
+    regles = PROFILS[profil]
+    marche = probas_marche(df)
+    ia = {c["num"]: c["p"] for c in chevaux}
+    lignes = []
+    for _, row in df.iterrows():
+        num, cote = row["NUM"], row["COTE"]
+        p = ia.get(num)
+        cote = None if pd.isna(cote) else float(cote)
+        q = marche.get(num) if marche else None
+        retenue = CONFIANCE_IA * p + (1 - CONFIANCE_IA) * q if (p is not None and q is not None) else None
+        lignes.append({
+            "num": num, "nom": row["NOM"], "cote": cote, "proba_ia": p, "proba_marche": q,
+            "proba_retenue": retenue,
+            "gain_espere": retenue * cote - 1 if retenue is not None else None,
+        })
+    analyse = pd.DataFrame(lignes).sort_values("proba_ia", ascending=False, na_position="last")
+    resultat = {"jouer": False, "pari": None, "analyse": analyse}
+
+    if marche is None:
+        manquantes = [str(n) for n in df.loc[df["COTE"].isna(), "NUM"]]
+        resultat["raison"] = (f"Cote manquante (n° {', '.join(manquantes)}) : le gain ne peut pas être mesuré. "
+                              "Collez les partants avec leurs cotes.")
+        return resultat
+
+    # Chevaux compatibles avec le profil (probabilité et cote), puis seuil de gain espéré
+    compatibles = [l for l in lignes if l["gain_espere"] is not None
+                   and l["proba_retenue"] >= regles["p_min"] and l["cote"] <= regles["cote_max"]]
+    candidats = [l for l in compatibles if l["gain_espere"] >= regles["ev_min"]]
+    if not candidats:
+        meilleur = max(compatibles, key=lambda l: l["gain_espere"], default=None)
+        detail = (f" Le meilleur cheval compatible (n° {meilleur['num']}) n'offre que "
+                  f"{meilleur['gain_espere']:+.0%} de gain espéré." if meilleur
+                  else " Aucun cheval n'a une probabilité et une cote compatibles avec ce profil.")
+        resultat["raison"] = (f"Pas de valeur mesurable pour le profil {profil} "
+                              f"({decrire_profil(profil)}).{detail}")
+        return resultat
+
+    choix = max(candidats, key=lambda l: l["gain_espere"])
+    kelly = (choix["proba_retenue"] * choix["cote"] - 1) / (choix["cote"] - 1)
+    fraction = min(regles["kelly"] * kelly, regles["plafond"])
+    mise = round(max(float(capital), 0) * fraction, 2)
+    if budget_restant is not None:
+        if budget_restant <= 0:
+            resultat["raison"] = "Limite de pertes atteinte sur la période : pas de nouveau pari."
+            return resultat
+        mise = round(min(mise, budget_restant), 2)
+    if mise <= 0:
+        resultat["raison"] = "Capital nul : pas de mise possible."
+        return resultat
+
+    resultat.update(jouer=True, raison=None, pari={**choix, "type": "Simple Gagnant", "mise": mise,
+                                                  "fraction": mise / capital if capital else 0})
+    return resultat
+
+
+def pertes_recentes(historique, maintenant, jours=7):
+    """Perte nette (mises − sommes rapportées) des tickets des `jours` derniers jours.
+    Les tickets en attente comptent leur mise : c'est de l'argent engagé."""
+    if historique is None or historique.empty:
+        return 0.0
+    dates = pd.to_datetime(historique["date"], errors="coerce", format="%Y-%m-%d %H:%M")
+    recents = historique[dates >= maintenant - pd.Timedelta(days=jours)]
+    mises = pd.to_numeric(recents["mise"], errors="coerce").fillna(0).sum()
+    gains = pd.to_numeric(recents["gain_reel"], errors="coerce").fillna(0).sum()
+    return float(mises - gains)
 
 
 # --- Gemini --------------------------------------------------------------
@@ -141,44 +264,7 @@ class GeminiErreur(Exception):
     """Erreur affichable telle quelle (ne contient jamais la clé API)."""
 
 
-def construire_prompt(partants_str, hippo, discipline, profil, recherche):
-    if recherche:
-        consigne_infos = (f"Utilise la recherche Google pour trouver la course du jour à {hippo} "
-                          "(météo, distance, état du terrain, cotes actuelles si disponibles).")
-    else:
-        consigne_infos = ("Tu n'as pas accès à internet : si tu ne connais pas la météo ou la distance, "
-                          "mets \"❔\" plutôt que d'inventer.")
-    return f"""Expert Turf. Hippodrome : {hippo} | Discipline : {discipline} | Profil du parieur : {profil}.
-
-PARTANTS (numéro réel - nom (ferrure | musique, "(25)" = année 2025 | puis si connus :
-sexe/âge | poids | jockey / entraîneur | cote)) :
-{partants_str}
-
-MISSION :
-1. {consigne_infos}
-2. Classe les 5 chevaux les plus probables avec leur probabilité estimée.
-3. Indique avec "out": true le cheval que tu considères comme outsider (au plus un), false pour les autres.
-4. Propose {TYPES_PARI[profil]}, avec UNIQUEMENT les numéros des chevaux.
-5. "gain" = gain net estimé pour une mise de 1 €, si tu peux l'estimer à partir des cotes, sinon "?".
-
-RÉPONDS UNIQUEMENT AVEC UN JSON DE CETTE FORME. Les valeurs entre <> sont à remplacer
-par TES estimations pour CETTE course : ne recopie aucun exemple.
-{{
-    "m": "<emoji météo, ou ❔>", "d": "<distance réelle, ou ❔>", "r": "<Faible, Modéré ou Élevé>",
-    "ordre": "<NUM> - <NUM> - <NUM>",
-    "podium": [
-        {{"n": "<NUM> - <NOM>", "p": "<probabilité>%", "out": <true ou false>}},
-        ... 5 chevaux au total, du plus probable au moins probable
-    ],
-    "pari_nom": "<type de pari>",
-    "pari_nums": "<NUM> - <NUM> - ...",
-    "gain": "<gain net estimé pour 1 €, ou ?>"
-}}
-"""
-
-
-URL_V1 = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent"
-URL_V1BETA = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 MESSAGES_HTTP = {
     400: "Requête refusée par Gemini (clé API invalide ?).",
@@ -187,17 +273,17 @@ MESSAGES_HTTP = {
 }
 
 
-def _poster(url, api_key, payload):
+def _poster(api_key, payload):
     # La clé passe dans un en-tête et non dans l'URL : elle n'apparaît pas dans les journaux.
     try:
-        return requests.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=40)
+        response = requests.post(URL_GEMINI, json=payload, headers={"x-goog-api-key": api_key}, timeout=60)
     except requests.Timeout:
         raise GeminiErreur("Gemini n'a pas répondu à temps. Réessayez.")
     except requests.RequestException:
         raise GeminiErreur("Impossible de joindre Gemini (problème réseau).")
-
-
-def _texte_reponse(response):
+    if response.status_code != 200:
+        raise GeminiErreur(MESSAGES_HTTP.get(
+            response.status_code, f"Gemini a renvoyé une erreur (code {response.status_code})."))
     try:
         parts = response.json()['candidates'][0]['content']['parts']
         texte = "".join(p.get('text', '') for p in parts)
@@ -208,24 +294,57 @@ def _texte_reponse(response):
     return texte
 
 
-def appeler_gemini(api_key, prompt, recherche):
-    """Retourne (texte, recherche_utilisee). Lève GeminiErreur en cas d'échec.
+def rechercher_contexte(api_key, hippo, discipline, jour):
+    """Recherche Google des infos du jour (météo, terrain, distances). Lève GeminiErreur."""
+    prompt = (f"Nous sommes le {jour}. Recherche la réunion de courses hippiques à {hippo} aujourd'hui "
+              f"(discipline : {discipline}). Réponds en texte court : météo, état du terrain, puis la liste "
+              "des courses (nom, heure, distance, principaux partants). Si tu ne trouves rien de fiable, "
+              "écris seulement : AUCUNE DONNÉE.")
+    return _poster(api_key, {"contents": [{"parts": [{"text": prompt}]}],
+                             "tools": [{"google_search": {}}],
+                             "generationConfig": {"temperature": 0.1}})
 
-    Avec la recherche Google, si Gemini refuse l'option (non disponible, quota de
-    recherche épuisé), on refait automatiquement la demande sans recherche.
-    """
-    base = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
-    if recherche:
-        response = _poster(URL_V1BETA, api_key, {**base, "tools": [{"google_search": {}}]})
-        if response.status_code == 200:
-            return _texte_reponse(response), True
-        if response.status_code not in (400, 403, 429):
-            raise GeminiErreur(f"Gemini a renvoyé une erreur (code {response.status_code}).")
-    response = _poster(URL_V1, api_key, base)
-    if response.status_code != 200:
-        raise GeminiErreur(MESSAGES_HTTP.get(
-            response.status_code, f"Gemini a renvoyé une erreur (code {response.status_code})."))
-    return _texte_reponse(response), False
+
+def construire_prompt(partants_str, hippo, discipline, profil, contexte):
+    if contexte and "AUCUNE DONNÉE" not in contexte:
+        bloc_contexte = f"CONTEXTE DU JOUR (recherche internet) :\n{contexte}"
+    else:
+        bloc_contexte = ("Aucune donnée du jour : si tu ne connais pas la météo ou la distance, "
+                         "mets \"❔\" plutôt que d'inventer.")
+    return f"""Expert Turf. Hippodrome : {hippo} | Discipline : {discipline}.
+
+PARTANTS (numéro réel - nom (ferrure | musique, "(25)" = année 2025 | puis si connus :
+sexe/âge | poids | jockey / entraîneur | cote)) :
+{partants_str}
+
+{bloc_contexte}
+
+MISSION :
+1. Estime pour CHAQUE partant sa probabilité de GAGNER, en %, la somme faisant 100.
+   Fais ta propre analyse (forme, musique, poids, jockey, terrain, distance) : les cotes
+   donnent l'avis des parieurs, ne te contente pas de les recopier.
+2. Mets "out": true pour au plus un outsider (cheval peu coté qui a selon toi une vraie chance).
+3. Propose une idée de pari combiné adaptée au profil {profil} : {TYPES_PARI[profil]},
+   avec UNIQUEMENT des numéros de la liste.
+
+Réponds avec un JSON de cette forme. Les valeurs entre <> sont à remplacer par TES
+estimations pour CETTE course : ne recopie aucun exemple.
+{{
+    "m": "<emoji météo, ou ❔>", "d": "<distance réelle, ou ❔>", "r": "<Faible, Modéré ou Élevé>",
+    "chevaux": [
+        {{"num": "<NUM>", "p": <probabilité de victoire en %>, "out": <true ou false>}},
+        ... un objet par partant
+    ],
+    "pari_nom": "<type de pari combiné>",
+    "pari_nums": "<NUM> - <NUM> - ..."
+}}
+"""
+
+
+def analyser(api_key, prompt):
+    """Analyse sans recherche, réponse JSON imposée. Lève GeminiErreur."""
+    return _poster(api_key, {"contents": [{"parts": [{"text": prompt}]}],
+                             "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}})
 
 
 def extraire_json(texte):
@@ -236,42 +355,80 @@ def extraire_json(texte):
     return json.loads(texte[debut:fin + 1])
 
 
-def valider_reponse(res):
-    """Vérifie et normalise la réponse de Gemini. Lève ValueError si inutilisable."""
-    if not isinstance(res, dict) or not isinstance(res.get('podium'), list) or not res['podium']:
-        raise ValueError("Podium absent")
-    podium = []
-    for p in res['podium'][:5]:
-        if not isinstance(p, dict) or 'n' not in p:
-            raise ValueError("Cheval mal formé")
-        podium.append({"n": str(p['n']), "p": str(p.get('p', '?')), "out": p.get('out') is True})
-    # Au plus un outsider : on garde le premier signalé
-    vu = False
-    for p in podium:
-        p['out'], vu = (p['out'] and not vu), (vu or p['out'])
-    for cle in ('pari_nom', 'pari_nums'):
-        if not res.get(cle):
-            raise ValueError(f"Champ {cle} manquant")
-    return {
-        "m": str(res.get('m', '❔')), "d": str(res.get('d', '❔')), "r": str(res.get('r', '?')),
-        "ordre": str(res.get('ordre', ' - '.join(p['n'].split(' - ')[0] for p in podium[:3]))),
-        "podium": podium,
-        "pari_nom": str(res['pari_nom']), "pari_nums": str(res['pari_nums']),
-        "gain": str(res.get('gain', '?')),
-    }
+def _numero(valeur):
+    m = re.match(r'\s*(\d{1,2})', str(valeur))
+    return str(int(m.group(1))) if m else None
+
+
+def _proba(valeur):
+    m = re.search(r'\d+(?:[.,]\d+)?', str(valeur))
+    return float(m.group(0).replace(',', '.')) if m else None
+
+
+def valider_reponse(res, df):
+    """Vérifie la réponse de Gemini par rapport aux partants.
+
+    Retourne (réponse normalisée, alertes). Les numéros inconnus sont écartés et signalés.
+    Lève ValueError si la réponse est inutilisable.
+    """
+    if not isinstance(res, dict) or not isinstance(res.get("chevaux"), list):
+        raise ValueError("Liste des chevaux absente")
+    noms = {str(int(n)): nom for n, nom in zip(df["NUM"], df["NOM"]) if str(n).isdigit()}
+    alertes, chevaux, vus = [], [], set()
+    for c in res["chevaux"]:
+        if not isinstance(c, dict):
+            continue
+        num, p = _numero(c.get("num")), _proba(c.get("p"))
+        if num is None or p is None:
+            continue
+        if num not in noms:
+            alertes.append(f"Gemini a cité le n° {num}, qui n'est pas au départ : ignoré.")
+            continue
+        if num in vus:
+            continue
+        vus.add(num)
+        chevaux.append({"num": num, "nom": noms[num], "p": p, "out": c.get("out") is True})
+    if not chevaux:
+        raise ValueError("Aucun cheval valide")
+
+    total = sum(c["p"] for c in chevaux)
+    if total > 1.5:  # pourcentages -> fractions
+        for c in chevaux:
+            c["p"] /= 100
+        total /= 100
+    if total > 1:  # la somme ne peut pas dépasser 100 %
+        for c in chevaux:
+            c["p"] /= total
+    chevaux.sort(key=lambda c: c["p"], reverse=True)
+    vu_out = False
+    for c in chevaux:
+        c["out"], vu_out = (c["out"] and not vu_out), (vu_out or c["out"])
+
+    combine = None
+    nums_pari = re.findall(r'\d{1,2}', str(res.get("pari_nums", "")))
+    if res.get("pari_nom") and nums_pari:
+        inconnus = [n for n in nums_pari if str(int(n)) not in noms]
+        if inconnus:
+            alertes.append(f"Le combiné proposé contient des numéros absents ({', '.join(inconnus)}) : écarté.")
+        else:
+            combine = {"nom": str(res["pari_nom"]), "nums": " - ".join(str(int(n)) for n in nums_pari)}
+
+    return {"m": str(res.get("m", "❔")), "d": str(res.get("d", "❔")), "r": str(res.get("r", "?")),
+            "chevaux": chevaux, "combine": combine}, alertes
 
 
 # --- Historique ----------------------------------------------------------
 
 COLONNES_HISTORIQUE = ["date", "hippodrome", "discipline", "profil", "pari", "chevaux",
-                       "mise", "resultat", "gain_reel"]
+                       "cote", "proba_ia", "gain_espere", "mise", "resultat", "gain_reel"]
 RESULTATS = ["En attente", "Gagné", "Perdu"]
 
 
-def ligne_historique(date, hippo, discipline, profil, res, mise):
+def ligne_historique(date, hippo, discipline, profil, pari):
     return {"date": date, "hippodrome": hippo, "discipline": discipline, "profil": profil,
-            "pari": res['pari_nom'], "chevaux": res['pari_nums'], "mise": mise,
-            "resultat": "En attente", "gain_reel": 0.0}
+            "pari": pari["type"], "chevaux": pari["num"], "cote": pari["cote"],
+            "proba_ia": round(pari["proba_retenue"], 3), "gain_espere": round(pari["gain_espere"], 3),
+            "mise": pari["mise"], "resultat": "En attente", "gain_reel": 0.0}
 
 
 def calculer_stats(df):

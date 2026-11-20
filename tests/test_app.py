@@ -10,21 +10,26 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
-PARTANTS = "12 FAKIR D4 1a 2a 3.5\n4 BOLERO DA 3a\n7 CASTOR 1m\n1 DIAMANT DP 5a\n9 ETOILE 2a"
-REPONSE = {
-    "m": "☀️", "d": "2700m", "r": "Modéré", "ordre": "12 - 4 - 7",
-    "podium": [{"n": "12 - FAKIR", "p": "38%", "out": False}, {"n": "4 - BOLERO", "p": "22%", "out": False},
-               {"n": "7 - CASTOR", "p": "15%", "out": True}, {"n": "1 - DIAMANT", "p": "11%", "out": False},
-               {"n": "9 - ETOILE", "p": "8%", "out": False}],
-    "pari_nom": "Trio", "pari_nums": "12 - 4 - 7", "gain": "+2.50€",
-}
+SITE = (Path(__file__).parent / "donnees" / "partants_site.txt").read_text()
+
+# L'IA voit le n° 4 (cote 5.8) nettement au-dessus des cotes : pari mesurable en Équilibré
+AVEC_VALEUR = {"m": "☀️", "d": "3500m", "r": "Modéré",
+               "chevaux": [{"num": n, "p": p, "out": n == "6"} for n, p in
+                           [("5", 45), ("4", 25), ("1", 12), ("3", 8), ("6", 5), ("7", 3), ("2", 2)]],
+               "pari_nom": "Trio", "pari_nums": "5 - 4 - 1"}
+# L'IA reprend l'avis des cotes : aucune valeur
+SANS_VALEUR = {**AVEC_VALEUR, "chevaux": [{"num": n, "p": p} for n, p in
+                                          [("5", 50), ("4", 15), ("1", 13), ("3", 10), ("6", 8), ("7", 2), ("2", 2)]]}
 
 
-def http(code=200, texte=None):
+def http(code=200, texte=None, json_=AVEC_VALEUR):
     r = mock.Mock(status_code=code)
-    texte = texte if texte is not None else "```json\n" + json.dumps(REPONSE) + "\n```"
+    texte = texte if texte is not None else json.dumps(json_)
     r.json.return_value = {"candidates": [{"content": {"parts": [{"text": texte}]}}]}
     return r
+
+
+CONTEXTE = http(texte="Météo : soleil. Terrain : souple. Prix X : 3500 m.")
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +37,8 @@ def vider_cache():
     st.cache_data.clear()
 
 
-def lancer(reponses=None, exc=None, texte=PARTANTS, secrets=True, sheets=None, profil=None):
+def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profil=None,
+           recherche=True, discipline=None, limite=None, contexte=CONTEXTE):
     at = AppTest.from_file(APP, default_timeout=30)
     if secrets:
         at.secrets["gemini"] = {"api_key": "CLE-TEST"}
@@ -41,20 +47,35 @@ def lancer(reponses=None, exc=None, texte=PARTANTS, secrets=True, sheets=None, p
         at.secrets["autre"] = {"x": 1}
     if sheets is not None:
         at.secrets["connections"] = {"gsheets": {"type": "service_account"}}
-    post = mock.patch("requests.post", side_effect=exc or reponses)
-    conn = mock.patch("streamlit.connection", return_value=sheets)
-    with post as p, conn:
+    if reponses is not None and recherche:
+        reponses = [contexte] + reponses
+    with mock.patch("requests.post", side_effect=exc or reponses) as p, \
+            mock.patch("streamlit.connection", return_value=sheets):
         at.run()
-        if profil:
-            at.select_slider[0].set_value(profil).run()
         if at.text_area:
+            if profil:
+                at.select_slider[0].set_value(profil)
+            if not recherche:
+                at.toggle[0].set_value(False)
+            if discipline:
+                at.selectbox[0].set_value(discipline)
+            if limite is not None:
+                at.number_input[1].set_value(limite)
             at.text_area[0].input(texte)
-            [b for b in at.button if "TICKET" in b.label][0].click().run()
+            analyser(at).click().run()
     return at, p
+
+
+def analyser(at):
+    return [b for b in at.button if "ANALYSER" in b.label][0]
 
 
 def textes(elements):
     return [e.value for e in elements]
+
+
+def prompt(p, i=-1):
+    return p.call_args_list[i].kwargs["json"]["contents"][0]["parts"][0]["text"]
 
 
 def test_sans_secret():
@@ -62,93 +83,154 @@ def test_sans_secret():
     assert "Configurez votre API KEY" in textes(at.error)[0]
 
 
-def test_nominal_avec_recherche():
+def test_pari_conseille_avec_recherche():
     at, p = lancer([http()])
-    assert not at.exception and not at.error
-    labels = [m.label for m in at.metric]
-    assert "🥉 3ème 🔥 OUT" in labels  # outsider placé où Gemini l'a indiqué
-    assert "20.00 €" in textes(at.success)[0]  # 2 % de 1000 €
-    url, kwargs = p.call_args.args[0], p.call_args.kwargs
-    assert "v1beta" in url and kwargs["json"]["tools"] == [{"google_search": {}}]
-    assert kwargs["headers"] == {"x-goog-api-key": "CLE-TEST"}
-    assert "CLE-TEST" not in url
-    assert "cote 3.5" in kwargs["json"]["contents"][0]["parts"][0]["text"]
+    assert not at.exception and not at.error, textes(at.error)
+    assert p.call_count == 2
+    recherche, analyse = p.call_args_list
+    assert recherche.kwargs["json"]["tools"] == [{"google_search": {}}]
+    assert "tools" not in analyse.kwargs["json"]
+    assert analyse.kwargs["json"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert all(c.kwargs["headers"] == {"x-goog-api-key": "CLE-TEST"} for c in p.call_args_list)
+    assert all("CLE-TEST" not in c.args[0] for c in p.call_args_list if c.args)
+    assert "terrain : souple" in prompt(p).lower()  # contexte du jour transmis
+    assert "Discipline : Obstacles" in prompt(p)  # détectée d'après la musique
+    succes = textes(at.success)[0]
+    assert "Simple Gagnant n° 4 FOREST DU PECOS" in succes and "cote 5.8" in succes
+    assert [m.label for m in at.metric][4] == "🏇 5ème 🔥 OUT"  # n° 6, outsider désigné par l'IA
+    assert any("Trio 5 - 4 - 1" in c and "aucune mise" in c for c in textes(at.caption))
 
 
-def test_profil_prudent():
-    at, p = lancer([http()], profil="Prudent")
-    assert "10.00 €" in textes(at.success)[0]
-    assert "Simple Placé" in p.call_args.kwargs["json"]["contents"][0]["parts"][0]["text"]
+def test_pas_de_pari_sans_valeur():
+    at, _ = lancer([http(json_=SANS_VALEUR)])
+    assert not at.success
+    assert any("Pas de pari conseillé" in w and "Pas de valeur mesurable" in w for w in textes(at.warning))
 
 
-def test_recherche_indisponible_bascule_sans():
-    at, p = lancer([http(400), http()])
-    assert p.call_count == 2 and "tools" not in p.call_args.kwargs["json"]
-    assert any("Recherche Google indisponible" in i for i in textes(at.info))
+def test_pas_de_pari_sans_cotes():
+    texte = "5 LOKI 1s 2s\n4 FOREST 1s 3s 5.8"
+    reponse = {"chevaux": [{"num": "5", "p": 60}, {"num": "4", "p": 40}], "pari_nom": "Couplé", "pari_nums": "5 - 4"}
+    at, _ = lancer([http(json_=reponse)], texte=texte, recherche=False)
+    assert any("Cote manquante (n° 5)" in w for w in textes(at.warning))
+
+
+def test_profil_prudent_refuse_cote_trop_haute():
+    at, _ = lancer([http()], profil="Prudent")
+    assert not at.success and any("Pas de pari conseillé" in w for w in textes(at.warning))
+
+
+def test_sans_recherche_un_seul_appel():
+    at, p = lancer([http()], recherche=False)
+    assert p.call_count == 1 and "Aucune donnée du jour" in prompt(p)
     assert not at.error
 
 
+def test_recherche_indisponible():
+    at, p = lancer([http()], contexte=http(429))
+    assert p.call_count == 2
+    assert any("Recherche Google indisponible" in i for i in textes(at.info))
+    assert at.success  # l'analyse a quand même eu lieu, sans données du jour
+    assert "Aucune donnée du jour" in prompt(p)
+
+
+def test_recherche_faite_une_fois_par_jour():
+    at, p = lancer([http()])
+    autre = SITE.replace("6.5", "6.6")  # autre course, même hippodrome
+    with mock.patch("requests.post", side_effect=[http()]) as p2:
+        at.text_area[0].input(autre)
+        analyser(at).click().run()
+    assert p2.call_count == 1 and "tools" not in p2.call_args.kwargs["json"]
+
+
+def test_meme_course_en_cache():
+    at, _ = lancer([http()])
+    with mock.patch("requests.post", side_effect=[]) as p2:
+        analyser(at).click().run()
+    assert p2.call_count == 0 and at.success
+
+
+def test_discipline_contradictoire_signalee():
+    at, p = lancer([http()], discipline="Trot", recherche=False)
+    assert any("indique plutôt **Obstacles**" in i for i in textes(at.info))
+    assert "Discipline : Trot" in prompt(p)
+
+
+def test_numero_inconnu_signale():
+    reponse = {**AVEC_VALEUR, "chevaux": AVEC_VALEUR["chevaux"] + [{"num": "15", "p": 1}]}
+    at, _ = lancer([http(json_=reponse)], recherche=False)
+    assert any("n° 15, qui n'est pas au départ" in w for w in textes(at.warning))
+
+
 @pytest.mark.parametrize("reponses, exc, message", [
-    ([http(429), http(429)], None, "Quota Gemini dépassé"),
+    ([http(429)], None, "Quota Gemini dépassé"),
     (None, requests.Timeout(), "pas répondu à temps"),
     ([http(500)], None, "code 500"),
     ([http(texte="")], None, "vide ou bloquée"),
     ([http(texte="désolé, pas de JSON")], None, "Erreur d'analyse"),
+    ([http(json_={"chevaux": [{"num": "99", "p": 50}]})], None, "Erreur d'analyse"),
 ])
 def test_erreurs(reponses, exc, message):
-    at, _ = lancer(reponses, exc=exc)
+    at, _ = lancer(reponses, exc=exc, recherche=False)
     assert not at.exception
     assert message in textes(at.error)[0]
 
 
-def test_cache_meme_course():
-    at, p = lancer([http()])
-    with mock.patch("requests.post", side_effect=[http()]) as p2:
-        [b for b in at.button if "TICKET" in b.label][0].click().run()
-    assert p2.call_count == 0  # réponse reprise du cache
-
-
-def test_lignes_ignorees_et_saisie_vide():
-    at, _ = lancer([http()], texte=PARTANTS + "\n--- divers ---")
-    assert "--- divers ---" in textes(at.warning)[0]
-    at, p = lancer([], texte="")
+def test_saisie_vide_et_lignes_ignorees():
+    at, p = lancer([], texte="", recherche=False)
     assert "Veuillez saisir des partants" in textes(at.error)[0] and p.call_count == 0
+    at, _ = lancer([http()], texte="Prix de Paris\n" + SITE, recherche=False)
+    assert "Prix de Paris" in textes(at.warning)[0]
 
 
-def test_historique_desactive_sans_config():
-    at, _ = lancer([http()])
+def test_historique_desactive_et_limite_non_verifiee():
+    at, _ = lancer([http()], recherche=False)
     assert any("Historique désactivé" in i for i in textes(at.info))
+    assert any("Limite de pertes non vérifiée" in i for i in textes(at.info))
     assert not [b for b in at.button if "Enregistrer" in b.label]
 
 
-def test_enregistrer_ticket_et_stats():
+def historique(*lignes):
+    return pd.DataFrame([{"date": d, "hippodrome": "V", "discipline": "Obstacles", "profil": "Équilibré",
+                          "pari": "Simple Gagnant", "chevaux": "1", "cote": 3.0, "proba_ia": .4,
+                          "gain_espere": .2, "mise": m, "resultat": r, "gain_reel": g} for d, m, r, g in lignes])
+
+
+def maintenant(delta_jours=0):
+    return (pd.Timestamp.now() - pd.Timedelta(days=delta_jours)).strftime("%Y-%m-%d %H:%M")
+
+
+def test_enregistrer_ticket():
     feuille = mock.Mock()
     feuille.read.side_effect = Exception("onglet absent")
-    at, _ = lancer([http()], sheets=feuille)
+    at, _ = lancer([http()], sheets=feuille, recherche=False)
     with mock.patch("streamlit.connection", return_value=feuille):
         [b for b in at.button if "Enregistrer le ticket" in b.label][0].click().run()
     assert feuille.create.call_count == 1
-    ecrit = feuille.create.call_args.kwargs["data"]
-    assert ecrit.iloc[0][["pari", "chevaux", "mise", "resultat"]].tolist() == ["Trio", "12 - 4 - 7", 20.0, "En attente"]
+    ligne = feuille.create.call_args.kwargs["data"].iloc[0]
+    assert ligne["pari"] == "Simple Gagnant" and ligne["chevaux"] == "4" and ligne["cote"] == 5.8
+    assert 0 < ligne["mise"] <= 20 and ligne["resultat"] == "En attente"
     assert any("Ticket enregistré" in s for s in textes(at.success))
 
-    # Historique existant : un gagné, un perdu
-    feuille2 = mock.Mock()
-    feuille2.read.side_effect = None
-    feuille2.read.return_value = pd.DataFrame([
-        {"date": "d", "hippodrome": "V", "discipline": "Trot", "profil": "Équilibré", "pari": "Trio",
-         "chevaux": "1", "mise": 20, "resultat": "Gagné", "gain_reel": 50},
-        {"date": "d", "hippodrome": "V", "discipline": "Trot", "profil": "Équilibré", "pari": "Trio",
-         "chevaux": "2", "mise": 20, "resultat": "Perdu", "gain_reel": 0},
-    ])
-    at, _ = lancer([], texte="", sheets=feuille2)
+
+def test_limite_de_pertes_atteinte():
+    feuille = mock.Mock()
+    feuille.read.return_value = historique((maintenant(1), 60, "Perdu", 0), (maintenant(2), 50, "Perdu", 0))
+    at, _ = lancer([http()], sheets=feuille, recherche=False)  # limite par défaut : 100 €
+    assert not at.success
+    assert any("Limite de pertes atteinte" in w for w in textes(at.warning))
+
+
+def test_limite_de_pertes_reduit_la_mise():
+    feuille = mock.Mock()
+    feuille.read.return_value = historique((maintenant(1), 97, "Perdu", 0))
+    at, _ = lancer([http()], sheets=feuille, recherche=False)
+    assert "Mise : **3.00 €**" in textes(at.success)[0]
+
+
+def test_stats_historique():
+    feuille = mock.Mock()
+    feuille.read.return_value = historique((maintenant(30), 20, "Gagné", 50), (maintenant(30), 20, "Perdu", 0))
+    at, _ = lancer([], texte="", sheets=feuille, recherche=False)
     valeurs = {m.label: m.value for m in at.metric}
     assert valeurs["Bénéfice"] == "+10.00 €" and valeurs["ROI"] == "+25.0 %"
-
-
-def test_copier_coller_site_jusqu_a_gemini():
-    texte = (Path(__file__).parent / "donnees" / "partants_site.txt").read_text()
-    at, p = lancer([http()], texte=texte)
-    assert not at.error and not at.warning
-    prompt = p.call_args.kwargs["json"]["contents"][0]["parts"][0]["text"]
-    assert "5 - LOKI DE LA BRUNIE (F | 3s 2s 6c" in prompt and "Beaurain T. / Gourdon B. | cote 1.7" in prompt
+    assert valeurs["Perte 7 jours"] == "0.00 € / 100 €"

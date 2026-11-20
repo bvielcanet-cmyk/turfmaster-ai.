@@ -29,16 +29,22 @@ except Exception:
     st.stop()
 
 FEUILLE = "TurfMaster"  # onglet du Google Sheet où sont rangés les tickets
+AUTO = "Auto (d'après la musique)"
 
 
 # --- 2. SERVICES ---
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def contexte_du_jour(hippo, discipline, jour, _api_key):
+    """Recherche Google faite une fois par hippodrome et par jour (6 h de cache)."""
+    return tl.rechercher_contexte(_api_key, hippo, discipline, jour)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def analyser_course(partants_str, hippo, discipline, profil, recherche, _api_key):
-    """Appel Gemini mis en cache 1 h : recoller la même course ne consomme pas de quota.
+def analyser_course(partants_str, hippo, discipline, profil, contexte, _api_key):
+    """Analyse mise en cache 1 h : recoller la même course ne consomme pas de quota.
     Les erreurs (exceptions) ne sont jamais mises en cache."""
-    prompt = tl.construire_prompt(partants_str, hippo, discipline, profil, recherche)
-    return tl.appeler_gemini(_api_key, prompt, recherche)
+    return tl.analyser(_api_key, tl.construire_prompt(partants_str, hippo, discipline, profil, contexte))
 
 
 def connexion_sheets():
@@ -51,7 +57,7 @@ def connexion_sheets():
         return None, ("Historique désactivé : ajoutez une section `[connections.gsheets]` "
                       "dans les Secrets (voir le README).")
     if cfg.get("type") != "service_account":
-        return None, ("Historique en lecture seule impossible à mettre à jour : "
+        return None, ("Historique impossible à mettre à jour : "
                       "il faut un compte de service Google (voir le README).")
     try:
         from streamlit_gsheets import GSheetsConnection
@@ -80,20 +86,24 @@ def ecrire_historique(conn, df, existe):
         conn.create(worksheet=FEUILLE, data=df)
 
 
+def pct(x):
+    return "—" if x is None or pd.isna(x) else f"{x:.0%}"
+
+
 # --- 3. INTERFACE ---
 st.title("🚀 TurfMaster 2.5 : Ultimate Investor")
 
 with st.sidebar:
     hippo_input = st.text_input("Hippodrome", value="Vincennes")
-    discipline = st.selectbox("Discipline", ["Trot", "Plat", "Obstacles"])
+    choix_discipline = st.selectbox("Discipline", [AUTO] + tl.DISCIPLINES)
     st.divider()
     capital = st.number_input("Capital (€)", value=1000, min_value=0)
-    profil = st.select_slider("Profil de Risque", ["Prudent", "Équilibré", "Offensif"], value="Équilibré")
-    st.caption(f"Mise conseillée : {tl.POURCENTAGE_MISE[profil]:.0%} du capital "
-               f"= **{tl.calculer_mise(capital, profil):.2f} €**")
-    recherche = st.toggle("🔎 Recherche Google (météo, terrain, cotes)", value=True,
-                          help="Gemini cherche les infos du jour sur internet. "
-                               "Si l'option n'est pas disponible, l'analyse se fait sans.")
+    profil = st.select_slider("Profil de Risque", list(tl.PROFILS), value="Équilibré")
+    st.caption(f"Pari conseillé seulement si : {tl.decrire_profil(profil)}.")
+    limite_pertes = st.number_input("Perte max sur 7 jours (€, 0 = sans limite)", value=100, min_value=0,
+                                    help="Vérifiée avec l'historique Google Sheets.")
+    recherche = st.toggle("🔎 Recherche Google (météo, terrain, distance)", value=True,
+                          help="Faite une fois par hippodrome et par jour, puis réutilisée.")
     if st.button("🧹 Reset"):
         st.session_state.pop("resultat", None)
         st.rerun()
@@ -102,10 +112,10 @@ conn, message_sheets = connexion_sheets()
 onglet_prono, onglet_histo = st.tabs(["🎯 Pronostic", "📊 Historique"])
 
 with onglet_prono:
-    txt_in = st.text_area("📋 Collez les partants copiés depuis le site, ou un cheval par ligne "
+    txt_in = st.text_area("📋 Collez les partants copiés depuis le site (avec les cotes), ou un cheval par ligne "
                           "(ex: 12 FAKIR D4 1a 2a 4.5)", height=200)
 
-    if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
+    if st.button("⚡ ANALYSER LA COURSE"):
         st.session_state.pop("resultat", None)
         df, lignes_ignorees = tl.extraire_data_pro(txt_in)
         if lignes_ignorees:
@@ -114,16 +124,42 @@ with onglet_prono:
         if df.empty:
             st.error("Veuillez saisir des partants (ex: 12 NOM).")
         else:
+            notes = []
+            detectee = tl.detecter_discipline(df)
+            if choix_discipline == AUTO:
+                discipline = detectee or "Non précisée"
+            else:
+                discipline = choix_discipline
+                if detectee and detectee != discipline:
+                    notes.append(f"La musique des chevaux indique plutôt **{detectee}** "
+                                 f"alors que vous avez choisi **{discipline}**.")
             partants_str = "\n".join(f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows())
-            with st.spinner("🧪 Analyse des cotes et détection d'outsider..."):
+
+            with st.spinner("🧪 Analyse de la course et calcul de la valeur..."):
                 try:
-                    raw, recherche_utilisee = analyser_course(
-                        partants_str, hippo_input, discipline, profil, recherche, API_KEY)
-                    res = tl.valider_reponse(tl.extraire_json(raw))
+                    contexte = None
+                    if recherche:
+                        try:
+                            contexte = contexte_du_jour(hippo_input, discipline,
+                                                        datetime.now().strftime("%d/%m/%Y"), API_KEY)
+                        except tl.GeminiErreur as e:
+                            notes.append(f"Recherche Google indisponible ({e}) : analyse sans données du jour.")
+                    raw = analyser_course(partants_str, hippo_input, discipline, profil, contexte, API_KEY)
+                    res, alertes = tl.valider_reponse(tl.extraire_json(raw), df)
+
+                    budget = None
+                    if limite_pertes > 0:
+                        if conn is not None:
+                            histo, _ = lire_historique(conn)
+                            perte = tl.pertes_recentes(histo, pd.Timestamp.now())
+                            budget = limite_pertes - max(perte, 0)
+                        else:
+                            notes.append("Limite de pertes non vérifiée : l'historique Google Sheets n'est pas configuré.")
+                    decision = tl.evaluer_pari(res["chevaux"], df, capital, profil, budget)
+
                     st.session_state["resultat"] = {
-                        "res": res, "mise": tl.calculer_mise(capital, profil),
+                        "res": res, "decision": decision, "alertes": alertes, "notes": notes,
                         "hippo": hippo_input, "discipline": discipline, "profil": profil,
-                        "recherche_demandee": recherche, "recherche_utilisee": recherche_utilisee,
                         "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "enregistre": False,
                     }
                 except tl.GeminiErreur as e:
@@ -134,45 +170,67 @@ with onglet_prono:
     # Le résultat est gardé en mémoire : il reste affiché quand on clique sur « Enregistrer ».
     r = st.session_state.get("resultat")
     if r:
-        res = r["res"]
+        res, decision = r["res"], r["decision"]
         st.divider()
-        if r["recherche_demandee"] and not r["recherche_utilisee"]:
-            st.info("ℹ️ Recherche Google indisponible : analyse faite sans données du jour.")
+        for note in r["notes"]:
+            st.info(f"ℹ️ {note}")
+        for alerte in r["alertes"]:
+            st.warning(f"⚠️ {alerte}")
 
         # 1. BANDEAU INFO
         c1, c2, c3 = st.columns([1, 1, 2])
         color = ("risk-low" if res['r'] == "Faible"
                  else "risk-med" if res['r'] == "Modéré" else "risk-high")
-        c1.markdown(f"Risque : <span class='{color}'>{res['r']}</span>", unsafe_allow_html=True)
-        c2.write(f"📍 {res['d']} | {res['m']}")
-        c3.info(f"🏁 Ordre : **{res['ordre']}**")
+        c1.markdown(f"Risque course : <span class='{color}'>{res['r']}</span>", unsafe_allow_html=True)
+        c2.write(f"📍 {res['d']} | {res['m']} | {r['discipline']}")
+        c3.info(f"🏁 Ordre IA : **{' - '.join(c['num'] for c in res['chevaux'][:3])}**")
 
-        # 2. PODIUM (Numéro - Nom), l'outsider signalé par Gemini porte 🔥
+        # 2. PODIUM : probabilité IA comparée à celle des cotes
         st.divider()
+        marche = {l["num"]: l["proba_marche"] for _, l in decision["analyse"].iterrows()}
         cols = st.columns(5)
         meds = ["🥇 1er", "🥈 2ème", "🥉 3ème", "🏇 4ème", "🏇 5ème"]
-        for col, med, p in zip(cols, meds, res['podium']):
-            col.metric(f"{med} 🔥 OUT" if p['out'] else med, p['n'], p['p'])
+        for col, med, c in zip(cols, meds, res["chevaux"][:5]):
+            col.metric(f"{med} 🔥 OUT" if c["out"] else med, f"{c['num']} - {c['nom']}")
+            col.caption(f"IA **{pct(c['p'])}** · cotes {pct(marche.get(c['num']))}")
 
-        # 3. TICKET FINAL
+        # 3. DÉCISION
         st.divider()
-        l1, l2 = st.columns([2, 1])
-        with l1:
-            st.success(f"🎫 **{res['pari_nom']}** | Chevaux : **{res['pari_nums']}** "
-                       f"| Mise : **{r['mise']:.2f} €** ({r['profil']})")
-        with l2:
-            st.metric("Gain net estimé (pour 1 €, IA)", res['gain'])
-        st.caption("Les probabilités sont des estimations de l'IA, pas une garantie. "
+        pari = decision["pari"]
+        if decision["jouer"]:
+            cote_min = (1 + tl.PROFILS[r["profil"]]["ev_min"]) / pari["proba_retenue"]
+            st.success(f"✅ **Pari conseillé : Simple Gagnant n° {pari['num']} {pari['nom']}** "
+                       f"| cote {pari['cote']:g} | Mise : **{pari['mise']:.2f} €** "
+                       f"({pari['fraction']:.1%} du capital, profil {r['profil']})")
+            st.caption(f"Probabilité retenue {pct(pari['proba_retenue'])} (IA {pct(pari['proba_ia'])}, "
+                       f"cotes {pct(pari['proba_marche'])}) → gain espéré **{pari['gain_espere']:+.0%}** "
+                       f"par euro misé. Les cotes bougent jusqu'au départ : ne jouez que si la cote "
+                       f"reste **≥ {cote_min:.1f}**.")
+        else:
+            st.warning(f"🚫 **Pas de pari conseillé.** {decision['raison']}")
+        if res["combine"]:
+            st.caption(f"💡 Idée de combiné de l'IA : {res['combine']['nom']} {res['combine']['nums']} — "
+                       "son gain ne peut pas être mesuré (rapports inconnus), donc aucune mise n'est conseillée.")
+
+        with st.expander("📊 Analyse de valeur de tous les partants"):
+            tableau = decision["analyse"].rename(columns={
+                "num": "N°", "nom": "Cheval", "cote": "Cote", "proba_ia": "Proba IA",
+                "proba_marche": "Proba cotes", "proba_retenue": "Proba retenue", "gain_espere": "Gain espéré"})
+            st.dataframe(tableau, hide_index=True, width="stretch", column_config={
+                c: st.column_config.NumberColumn(c, format="percent")
+                for c in ("Proba IA", "Proba cotes", "Proba retenue", "Gain espéré")})
+            st.caption(f"Probabilité retenue = moyenne entre l'IA et les cotes ({tl.CONFIANCE_IA:.0%} IA). "
+                       "Gain espéré = probabilité retenue × cote − 1.")
+        st.caption("Les probabilités de l'IA sont des estimations, pas une garantie. "
                    "Suivez vos résultats dans l'onglet Historique.")
 
-        if conn is not None:
+        if conn is not None and decision["jouer"]:
             if r["enregistre"]:
                 st.success("✅ Ticket enregistré dans l'historique.")
             elif st.button("💾 Enregistrer le ticket"):
                 try:
                     histo, existe = lire_historique(conn)
-                    ligne = tl.ligne_historique(r["date"], r["hippo"], r["discipline"],
-                                                r["profil"], res, r["mise"])
+                    ligne = tl.ligne_historique(r["date"], r["hippo"], r["discipline"], r["profil"], pari)
                     ecrire_historique(conn, pd.concat([histo, pd.DataFrame([ligne])],
                                                       ignore_index=True), existe)
                     r["enregistre"] = True
@@ -187,12 +245,15 @@ with onglet_histo:
     else:
         histo, existe = lire_historique(conn)
         stats = tl.calculer_stats(histo)
-        m = st.columns(5)
+        perte_7j = tl.pertes_recentes(histo, pd.Timestamp.now())
+        m = st.columns(6)
         m[0].metric("Tickets", f"{stats['nb_tickets']} ({stats['nb_resolus']} joués)")
         m[1].metric("Réussite", f"{stats['reussite']:.0f} %")
         m[2].metric("Misé", f"{stats['mise_totale']:.2f} €")
         m[3].metric("Bénéfice", f"{stats['benefice']:+.2f} €")
         m[4].metric("ROI", f"{stats['roi']:+.1f} %")
+        m[5].metric("Perte 7 jours", f"{max(perte_7j, 0):.2f} €"
+                    + (f" / {limite_pertes} €" if limite_pertes else ""))
 
         if histo.empty:
             st.caption("Aucun ticket enregistré pour l'instant.")
@@ -218,4 +279,4 @@ with onglet_histo:
                     st.error("Impossible d'écrire dans le Google Sheet.")
 
 st.divider()
-st.caption("Mise calculée selon le profil | Recherche Google | Outsider 🔥 | Historique Google Sheets")
+st.caption("Pari conseillé uniquement si la valeur est mesurable | Recherche du jour | Historique Google Sheets")

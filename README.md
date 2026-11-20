@@ -1,7 +1,7 @@
 # TurfMaster
 
-Application Streamlit qui analyse une liste de partants avec Gemini et propose un ticket
-(classement des 5 chevaux, outsider, type de pari, mise).
+Application Streamlit qui analyse une liste de partants avec Gemini et ne conseille un pari
+**que lorsque son intérêt est mesurable** par rapport à votre profil de risque.
 
 > Les probabilités sont des estimations de l'IA, pas une garantie. L'onglet **Historique**
 > permet de vérifier, course après course, si les pronostics rapportent vraiment.
@@ -32,27 +32,47 @@ Application Streamlit qui analyse une liste de partants avec Gemini et propose u
      ```
 
    Les lignes non reconnues sont signalées. La cote (avec un point ou une virgule) est facultative.
-3. Cliquez sur **⚡ GÉNÉRER LE TICKET GAGNANT**, puis **💾 Enregistrer le ticket** pour le garder.
+   La discipline est devinée d'après la musique (`a`/`m` trot, `p` plat, `h`/`s`/`c` obstacles)
+   si elle est sur « Auto ».
+3. Cliquez sur **⚡ ANALYSER LA COURSE**. Si un pari est conseillé, **💾 Enregistrer le ticket**.
 4. Après la course, dans **📊 Historique**, indiquez *Gagné* ou *Perdu* et la somme rapportée.
 
-### Mise
+### Quand l'application conseille-t-elle de jouer ?
 
-La mise est calculée par l'application, pas par l'IA :
+Un pari n'est conseillé que si son intérêt peut être **mesuré** :
 
-| Profil | Mise | Type de pari demandé |
-|---|---|---|
-| Prudent | 1 % du capital | Simple Placé, Couplé Placé |
-| Équilibré | 2 % du capital | Couplé Gagnant, Trio, Couplé Placé |
-| Offensif | 4 % du capital | Trio Ordre, Quarté+, Quinté+ |
+1. **Il faut la cote de chaque partant.** Sinon : « 🚫 Pas de pari », cote manquante.
+2. **Probabilité retenue** = moyenne entre l'estimation de l'IA et celle des cotes (marge des
+   opérateurs retirée). L'IA peut se tromper, surtout sur les petites probabilités : on ne lui
+   fait confiance qu'à moitié.
+3. **Gain espéré** pour 1 € misé en Simple Gagnant = probabilité retenue × cote − 1.
+4. Le pari est conseillé seulement si **toutes** les conditions du profil sont remplies :
+
+| Profil | Gain espéré | Probabilité | Cote | Mise maximale |
+|---|---|---|---|---|
+| Prudent | ≥ +10 % | ≥ 30 % | ≤ 4 | 1 % du capital |
+| Équilibré | ≥ +8 % | ≥ 15 % | ≤ 10 | 2 % du capital |
+| Offensif | ≥ +5 % | ≥ 8 % | ≤ 25 | 4 % du capital |
+
+5. **Mise** = fraction du critère de Kelly (¼ en Prudent et Équilibré, ½ en Offensif),
+   plafonnée comme ci-dessus : plus l'écart avec les cotes est grand, plus la mise l'est.
+6. **Limite de pertes** sur 7 jours (100 € par défaut, réglable) : la mise est réduite puis
+   bloquée quand elle est atteinte. Les tickets en attente comptent. Nécessite l'historique.
+
+Les cotes bougent jusqu'au départ : l'application indique la **cote minimale** en dessous de
+laquelle le pari n'a plus de valeur.
+
+Les paris combinés (Trio, Couplé…) proposés par l'IA sont affichés comme idée, **sans mise** :
+leur gain ne peut pas être mesuré sans leurs rapports.
+
+Les numéros renvoyés par Gemini sont vérifiés : un numéro absent du départ est écarté et signalé.
 
 ### Recherche Google
 
-L'option **🔎 Recherche Google** laisse Gemini chercher la météo, le terrain et les cotes du jour.
-Si elle n'est pas disponible pour votre clé (ou si son quota est épuisé), l'analyse est
-refaite automatiquement sans recherche et un message l'indique.
-
-Une même course (mêmes partants et réglages) n'est envoyée qu'une fois par heure à Gemini :
-la réponse est réutilisée, ce qui économise le quota.
+L'option **🔎 Recherche Google** cherche la météo, le terrain et les distances du jour. Elle est
+faite **une fois par hippodrome et par jour** puis réutilisée : seule la première course de la
+réunion est plus lente. Si elle n'est pas disponible, l'analyse se fait sans et un message
+l'indique. Une même course n'est envoyée qu'une fois par heure à Gemini.
 
 ## Configuration (Secrets)
 
@@ -91,6 +111,12 @@ client_x509_cert_url = "..."
 
 Les tickets sont rangés dans un onglet **TurfMaster**, créé automatiquement : les autres
 onglets du classeur ne sont pas touchés. `test_diag.py` permet de vérifier la connexion.
+
+## Versions
+
+Les versions des bibliothèques sont fixées dans `requirements.txt` : une mise à jour de
+Streamlit ne peut pas casser l'application sans prévenir. Pour les mettre à jour, changez les
+numéros, lancez les tests, puis publiez.
 
 ## Lancer en local
 
