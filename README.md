@@ -9,13 +9,27 @@ Application Streamlit qui analyse une liste de partants avec Gemini et propose u
 ## Utilisation
 
 1. Dans la barre latérale : hippodrome, discipline, capital et profil de risque.
-2. Collez les partants, un par ligne : `NUMÉRO NOM [FERRURE] [MUSIQUE] [COTE]`
+2. Collez les partants. Deux formats sont acceptés :
 
-   ```
-   12 FAKIR D4 1a 2a 4.5
-   3 ÉCLAIR DE LUNE DA 1a 12,5
-   8 JOE 3m
-   ```
+   - **le copier-coller du tableau des partants d'un site de courses**, tel quel (numéro seul,
+     puis nom, jockey - entraîneur, sexe/âge, poids, musique et cote) :
+
+     ```
+     1
+     ISISDELAGARDE
+     Zuliani L. - Lagarde F.
+         H/8   69 kg   2s 5s 1s (25) 3s 2s 2s   6.5
+     2
+     FENOMENE D'OC
+     ...
+     ```
+
+   - **un cheval par ligne** : `NUMÉRO NOM [FERRURE] [MUSIQUE] [COTE]`
+
+     ```
+     12 FAKIR D4 1a 2a 4.5
+     3 ÉCLAIR DE LUNE DA 1a 12,5
+     ```
 
    Les lignes non reconnues sont signalées. La cote (avec un point ou une virgule) est facultative.
 3. Cliquez sur **⚡ GÉNÉRER LE TICKET GAGNANT**, puis **💾 Enregistrer le ticket** pour le garder.

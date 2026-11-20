@@ -9,8 +9,15 @@ import requests
 # --- Lecture des partants -------------------------------------------------
 
 RE_FER = re.compile(r'^(D4|DP|DA)$', re.IGNORECASE)
-RE_MUSIQUE = re.compile(r'\b\d{1,2}[admphsc]\b|\b[A-Z]D\b|\bD[admp]\b')
+# Musique : place + discipline (1a, 10p, 2s...), ou lettre + discipline
+# (T = tombé, A = arrêté, D = disqualifié, R = rétrogradé : Ts, As, Da...)
+RE_MUSIQUE = re.compile(r'\b\d{1,2}[admphsc]\b|\b[TADR][admphsc]\b')
+RE_MUSIQUE_ANNEES = re.compile(r'\(\d{2}\)|\b\d{1,2}[admphsc]\b|\b[TADR][admphsc]\b')
 RE_COTE = re.compile(r'(?<![\w.,])(\d{1,3}[.,]\d{1,2})(?![\w.,])')
+RE_POIDS = re.compile(r'(?<![\w.,])(\d{2}(?:[.,]\d)?)\s?kg\b', re.IGNORECASE)
+RE_SEXE_AGE = re.compile(r'\b([HFM])/(\d{1,2})\b')
+RE_NUMERO_SEUL = re.compile(r'^\d{1,2}$')
+RE_JOCKEY = re.compile(r'^[^\d|]+\s-\s[^\d|]+$')  # « Zuliani L. - Lagarde F. »
 
 
 def _est_fin_du_nom(mot):
@@ -24,42 +31,91 @@ def _est_fin_du_nom(mot):
     )
 
 
+def _separer_nom(texte):
+    """Coupe « FAKIR D4 1a » en ("FAKIR", "D4 1a")."""
+    mots = texte.split()
+    nom_mots = []
+    for mot in mots:
+        if _est_fin_du_nom(mot):
+            break
+        nom_mots.append(mot)
+    return " ".join(nom_mots).upper(), " ".join(mots[len(nom_mots):])
+
+
+def _fiche(numero, nom, suite, jockey=None, annees=False):
+    """Construit la ligne du partant à partir du texte qui suit son nom."""
+    fer = [m for m in re.findall(r'[A-Za-z0-9]+', suite) if RE_FER.match(m)]
+    poids = RE_POIDS.search(suite)
+    sans_poids = RE_POIDS.sub(" ", suite)  # un poids « 64,5 kg » n'est pas une cote
+    musique = (RE_MUSIQUE_ANNEES if annees else RE_MUSIQUE).findall(sans_poids)
+    cotes = RE_COTE.findall(sans_poids)
+    cote = float(cotes[-1].replace(',', '.')) if cotes else None
+    sexe_age = RE_SEXE_AGE.search(suite)
+
+    morceaux = [fer[0].upper() if fer else 'F', ' '.join(musique) if musique else 'N/A']
+    if sexe_age:
+        morceaux.append(sexe_age.group(0))
+    if poids:
+        morceaux.append(f"{poids.group(1)} kg")
+    if jockey:
+        morceaux.append(jockey.replace(" - ", " / "))
+    if cote is not None:
+        morceaux.append(f"cote {cote:g}")
+    return {"FULL_ID": f"{numero} - {nom}", "NUM": numero, "COTE": cote, "Info": " | ".join(morceaux)}
+
+
+def _lire_fiches(lignes):
+    """Format copié depuis un site de courses : une fiche de plusieurs lignes par cheval.
+
+        1
+        ISISDELAGARDE
+        Zuliani L. - Lagarde F.
+        H/8   69 kg   2s 5s 1s (25) 3s ...   6.5
+    """
+    data, ignorees, fiche = [], [], None
+    for ligne in lignes + [None]:
+        if ligne is None or RE_NUMERO_SEUL.match(ligne):
+            if fiche is not None:
+                nom_ligne, *autres = fiche["lignes"] or [""]
+                nom, suite = _separer_nom(nom_ligne)
+                if re.search(r'[A-ZÀ-Ý]', nom):
+                    i_jockey = next((i for i, l in enumerate(autres) if RE_JOCKEY.match(l)), None)
+                    jockey = autres[i_jockey] if i_jockey is not None else None
+                    suite = " ".join([suite] + [l for i, l in enumerate(autres) if i != i_jockey])
+                    data.append(_fiche(fiche["numero"], nom, suite, jockey, annees=True))
+                else:
+                    ignorees.append(f"N° {fiche['numero']} (nom introuvable)")
+            fiche = {"numero": ligne, "lignes": []} if ligne else None
+        elif fiche is None:
+            ignorees.append(ligne)  # texte avant le premier numéro
+        else:
+            fiche["lignes"].append(ligne)
+    return data, ignorees
+
+
 def extraire_data_pro(texte):
     """Retourne (DataFrame des partants, liste des lignes non reconnues).
 
-    Format attendu par ligne : NUMÉRO NOM [FERRURE] [MUSIQUE] [COTE]
-    ex. « 12 FAKIR D4 1a 2a 4.5 »
+    Deux formats acceptés :
+    - une ligne par cheval : NUMÉRO NOM [FERRURE] [MUSIQUE] [COTE], ex. « 12 FAKIR D4 1a 2a 4.5 » ;
+    - le copier-coller d'un site : numéro seul sur sa ligne, puis nom, jockey - entraîneur,
+      sexe/âge, poids, musique et cote sur les lignes suivantes.
     """
+    lignes = [l.strip() for l in texte.strip().split('\n') if l.strip()]
+    if any(RE_NUMERO_SEUL.match(l) for l in lignes):
+        data, ignorees = _lire_fiches(lignes)
+        return pd.DataFrame(data), ignorees
+
     data, ignorees = [], []
-    for ligne in texte.strip().split('\n'):
-        ligne = ligne.strip()
-        if not ligne:
-            continue
+    for ligne in lignes:
         num_match = re.match(r'^(\d{1,2})\s*[.\-):]?\s*', ligne)
         numero = num_match.group(1) if num_match else "?"
         reste = ligne[num_match.end():] if num_match else ligne
-
-        mots = reste.split()
-        nom_mots = []
-        for mot in mots:
-            if _est_fin_du_nom(mot):
-                break
-            nom_mots.append(mot)
-        nom = " ".join(nom_mots).upper()
+        nom, suite = _separer_nom(reste)
         if not re.search(r'[A-ZÀ-Ý]', nom):  # pas de lettre = pas un nom de cheval
             ignorees.append(ligne)
             continue
-
-        suite = " ".join(mots[len(nom_mots):])
-        fer = [m for m in re.findall(r'[A-Za-z0-9]+', suite) if RE_FER.match(m)]
-        musique = RE_MUSIQUE.findall(suite)
-        cotes = RE_COTE.findall(suite)
-        cote = float(cotes[-1].replace(',', '.')) if cotes else None
-
-        info = f"{fer[0].upper() if fer else 'F'} | {' '.join(musique) if musique else 'N/A'}"
-        if cote is not None:
-            info += f" | cote {cote:g}"
-        data.append({"FULL_ID": f"{numero} - {nom}", "NUM": numero, "COTE": cote, "Info": info})
+        data.append(_fiche(numero, nom, suite))
     return pd.DataFrame(data), ignorees
 
 
@@ -94,7 +150,8 @@ def construire_prompt(partants_str, hippo, discipline, profil, recherche):
                           "mets \"❔\" plutôt que d'inventer.")
     return f"""Expert Turf. Hippodrome : {hippo} | Discipline : {discipline} | Profil du parieur : {profil}.
 
-PARTANTS (numéros réels, ferrure | musique | cote éventuelle) :
+PARTANTS (numéro réel - nom (ferrure | musique, "(25)" = année 2025 | puis si connus :
+sexe/âge | poids | jockey / entraîneur | cote)) :
 {partants_str}
 
 MISSION :

@@ -102,7 +102,8 @@ conn, message_sheets = connexion_sheets()
 onglet_prono, onglet_histo = st.tabs(["🎯 Pronostic", "📊 Historique"])
 
 with onglet_prono:
-    txt_in = st.text_area("📋 Collez ici (ex: 12 FAKIR D4 1a 2a 4.5 — la cote est facultative)", height=150)
+    txt_in = st.text_area("📋 Collez les partants copiés depuis le site, ou un cheval par ligne "
+                          "(ex: 12 FAKIR D4 1a 2a 4.5)", height=200)
 
     if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
         st.session_state.pop("resultat", None)

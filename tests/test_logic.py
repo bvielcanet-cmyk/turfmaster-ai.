@@ -86,3 +86,29 @@ def test_stats():
 
 def test_stats_vide():
     assert tl.calculer_stats(pd.DataFrame(columns=tl.COLONNES_HISTORIQUE))["roi"] == 0
+
+
+DONNEES = __import__("pathlib").Path(__file__).parent / "donnees"
+
+
+def test_copier_coller_site():
+    df, ignorees = tl.extraire_data_pro((DONNEES / "partants_site.txt").read_text())
+    assert ignorees == []
+    assert list(df["FULL_ID"]) == ["1 - ISISDELAGARDE", "2 - FENOMENE D'OC", "3 - CHUCK BERRY",
+                                   "4 - FOREST DU PECOS", "5 - LOKI DE LA BRUNIE", "6 - STINGO", "7 - SHERKARA"]
+    assert list(df["COTE"]) == [6.5, 53.6, 8.5, 5.8, 1.7, 11.3, 31.5]
+    assert df.iloc[0]["Info"] == ("F | 2s 5s 1s (25) 3s 2s 2s 2s 3s 3s (24) 4s 2s 2s | H/8 | 69 kg "
+                                  "| Zuliani L. / Lagarde F. | cote 6.5")
+    assert "Ts" in df.iloc[1]["Info"] and "F/5" in df.iloc[6]["Info"]
+
+
+def test_copier_coller_poids_decimal_et_sans_cote():
+    df, _ = tl.extraire_data_pro("3\nBOLERO\nDupont A. - Martin B.\nH/6  64,5 kg  1s 2s")
+    row = df.iloc[0]
+    assert pd.isna(row["COTE"]) and "64,5 kg" in row["Info"]
+
+
+def test_copier_coller_texte_avant_et_fiche_sans_nom():
+    df, ignorees = tl.extraire_data_pro("Prix de Paris\n1\nFAKIR\nH/5 1s 3.2\n2\n\n3\nCASTOR\n2s")
+    assert list(df["FULL_ID"]) == ["1 - FAKIR", "3 - CASTOR"]
+    assert ignorees == ["Prix de Paris", "N° 2 (nom introuvable)"]

@@ -141,3 +141,11 @@ def test_enregistrer_ticket_et_stats():
     at, _ = lancer([], texte="", sheets=feuille2)
     valeurs = {m.label: m.value for m in at.metric}
     assert valeurs["Bénéfice"] == "+10.00 €" and valeurs["ROI"] == "+25.0 %"
+
+
+def test_copier_coller_site_jusqu_a_gemini():
+    texte = (Path(__file__).parent / "donnees" / "partants_site.txt").read_text()
+    at, p = lancer([http()], texte=texte)
+    assert not at.error and not at.warning
+    prompt = p.call_args.kwargs["json"]["contents"][0]["parts"][0]["text"]
+    assert "5 - LOKI DE LA BRUNIE (F | 3s 2s 6c" in prompt and "Beaurain T. / Gourdon B. | cote 1.7" in prompt
