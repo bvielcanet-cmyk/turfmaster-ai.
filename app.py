@@ -1,9 +1,9 @@
-import streamlit as st
-import pandas as pd  # Correction ici : pandas et non pd
-import re
-import requests
-import json
 from datetime import datetime
+
+import pandas as pd
+import streamlit as st
+
+import turf_logic as tl
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="TurfMaster 2.5 : Final Pro", page_icon="🚀", layout="wide")
@@ -28,116 +28,57 @@ except Exception:
     st.error("❌ Configurez votre API KEY dans les Secrets ([gemini] api_key = \"...\").")
     st.stop()
 
-# --- 2. FONCTIONS DE CALCUL ---
+FEUILLE = "TurfMaster"  # onglet du Google Sheet où sont rangés les tickets
 
-RE_FER = re.compile(r'^(D4|DP|DA)$', re.IGNORECASE)
-RE_MUSIQUE = re.compile(r'\b\d{1,2}[admphsc]\b|\b[A-Z]D\b|\bD[admp]\b')
 
-def _est_fin_du_nom(mot):
-    """Un mot qui n'appartient plus au nom : ferrure, musique, chiffre, parenthèse."""
-    return bool(
-        RE_FER.match(mot)
-        or RE_MUSIQUE.fullmatch(mot)
-        or re.match(r'^\d', mot)
-        or mot.startswith('(')
-        or not re.search(r'[A-Za-zÀ-ÿ]', mot)  # "---", "*", etc.
-    )
+# --- 2. SERVICES ---
 
-def extraire_data_pro(texte):
-    """Retourne (DataFrame des partants, liste des lignes non reconnues)."""
-    data, ignorees = [], []
-    for ligne in texte.strip().split('\n'):
-        ligne = ligne.strip()
-        if not ligne:
-            continue
-        num_match = re.match(r'^(\d{1,2})\s*[.\-):]?\s*', ligne)
-        numero = num_match.group(1) if num_match else "?"
-        reste = ligne[num_match.end():] if num_match else ligne
+@st.cache_data(ttl=3600, show_spinner=False)
+def analyser_course(partants_str, hippo, discipline, profil, recherche, _api_key):
+    """Appel Gemini mis en cache 1 h : recoller la même course ne consomme pas de quota.
+    Les erreurs (exceptions) ne sont jamais mises en cache."""
+    prompt = tl.construire_prompt(partants_str, hippo, discipline, profil, recherche)
+    return tl.appeler_gemini(_api_key, prompt, recherche)
 
-        # Le nom = tous les mots jusqu'à la ferrure / la musique (accents et noms courts acceptés)
-        mots = reste.split()
-        nom_mots = []
-        for mot in mots:
-            if _est_fin_du_nom(mot):
-                break
-            nom_mots.append(mot)
-        nom = " ".join(nom_mots).upper()
-        if not re.search(r'[A-ZÀ-Ý]', nom):  # pas de lettre = pas un nom de cheval
-            ignorees.append(ligne)
-            continue
 
-        suite = " ".join(mots[len(nom_mots):])
-        fer = [m for m in re.findall(r'[A-Za-z0-9]+', suite) if RE_FER.match(m)]
-        musique = RE_MUSIQUE.findall(suite)
-        data.append({
-            "FULL_ID": f"{numero} - {nom}",
-            "NUM": numero,
-            "Info": f"{fer[0].upper() if fer else 'F'} | {' '.join(musique) if musique else 'N/A'}"
-        })
-    return pd.DataFrame(data), ignorees
-
-def extraire_json(texte):
-    """Récupère l'objet JSON même si Gemini ajoute du texte ou des ``` autour."""
-    debut, fin = texte.find('{'), texte.rfind('}')
-    if debut == -1 or fin == -1:
-        raise ValueError("Aucun JSON dans la réponse")
-    return json.loads(texte[debut:fin + 1])
-
-def simulation_performance_max(df, hippo, discipline, capital, profil):
-    partants_str = "\n".join([f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows()])
-    
-    prompt = f"""Expert Turf 2026. Hippodrome: {hippo} | Discipline: {discipline}.
-    
-    PARTANTS (Numéros Réels fournis) : 
-    {partants_str}
-
-    MISSION :
-    1. Détermine Météo/Distance pour {hippo}.
-    2. Calcule le TOP 5 Probabilités. 
-    3. Analyse obligatoirement si un Outsider (🔥) a un potentiel (>5% proba) et place-le dans le podium.
-    4. Génère un ticket avec UNIQUEMENT les numéros des chevaux.
-
-    RÉPONDS EN JSON STRICT :
-    {{
-        "m": "☀️", "d": "2700m", "r": "Modéré", "ordre": "Num - Num - Num",
-        "podium": [
-            {{"n": "NUM - NOM", "p": "38%"}},
-            {{"n": "NUM - NOM", "p": "22%"}},
-            {{"n": "NUM - NOM", "p": "15%"}},
-            {{"n": "NUM - NOM", "p": "11%"}},
-            {{"n": "NUM - NOM", "p": "8%"}}
-        ],
-        "pari_nom": "Trio Combiné",
-        "pari_nums": "12 - 4 - 7 - 1",
-        "mise": "20.00", 
-        "gain": "+35€"
-    }}
-    """
-    
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
-    
-    # Retourne (texte, erreur) : une des deux valeurs est None.
-    # Les messages d'erreur ne reprennent jamais l'URL (elle contient la clé API).
+def connexion_sheets():
+    """Retourne (connexion, message). La connexion est None si l'historique est indisponible."""
     try:
-        response = requests.post(url, json=payload, timeout=25)
-    except requests.Timeout:
-        return None, "Gemini n'a pas répondu à temps (25 s). Réessayez."
-    except requests.RequestException:
-        return None, "Impossible de joindre Gemini (problème réseau)."
-
-    if response.status_code != 200:
-        messages = {
-            400: "Requête refusée par Gemini (clé API invalide ?).",
-            403: "Accès refusé : vérifiez la clé API et ses droits.",
-            429: "Quota Gemini dépassé. Patientez un peu avant de réessayer.",
-        }
-        return None, messages.get(response.status_code,
-                                  f"Gemini a renvoyé une erreur (code {response.status_code}).")
+        cfg = st.secrets.get("connections", {}).get("gsheets")
+    except Exception:
+        cfg = None
+    if not cfg:
+        return None, ("Historique désactivé : ajoutez une section `[connections.gsheets]` "
+                      "dans les Secrets (voir le README).")
+    if cfg.get("type") != "service_account":
+        return None, ("Historique en lecture seule impossible à mettre à jour : "
+                      "il faut un compte de service Google (voir le README).")
     try:
-        return response.json()['candidates'][0]['content']['parts'][0]['text'], None
-    except (ValueError, KeyError, IndexError):
-        return None, "Réponse de Gemini vide ou bloquée. Réessayez."
+        from streamlit_gsheets import GSheetsConnection
+        return st.connection("gsheets", type=GSheetsConnection), None
+    except Exception:
+        return None, "Connexion au Google Sheet impossible. Vérifiez les Secrets."
+
+
+def lire_historique(conn):
+    """Retourne (DataFrame, onglet_existe)."""
+    try:
+        df = conn.read(worksheet=FEUILLE, ttl=0)
+    except Exception:
+        return pd.DataFrame(columns=tl.COLONNES_HISTORIQUE), False
+    df = df.dropna(how="all")
+    for col in tl.COLONNES_HISTORIQUE:
+        if col not in df.columns:
+            df[col] = None
+    return df[tl.COLONNES_HISTORIQUE], True
+
+
+def ecrire_historique(conn, df, existe):
+    if existe:
+        conn.update(worksheet=FEUILLE, data=df)
+    else:
+        conn.create(worksheet=FEUILLE, data=df)
+
 
 # --- 3. INTERFACE ---
 st.title("🚀 TurfMaster 2.5 : Ultimate Investor")
@@ -146,57 +87,135 @@ with st.sidebar:
     hippo_input = st.text_input("Hippodrome", value="Vincennes")
     discipline = st.selectbox("Discipline", ["Trot", "Plat", "Obstacles"])
     st.divider()
-    capital = st.number_input("Capital (€)", value=1000)
+    capital = st.number_input("Capital (€)", value=1000, min_value=0)
     profil = st.select_slider("Profil de Risque", ["Prudent", "Équilibré", "Offensif"], value="Équilibré")
-    if st.button("🧹 Reset"): st.rerun()
+    st.caption(f"Mise conseillée : {tl.POURCENTAGE_MISE[profil]:.0%} du capital "
+               f"= **{tl.calculer_mise(capital, profil):.2f} €**")
+    recherche = st.toggle("🔎 Recherche Google (météo, terrain, cotes)", value=True,
+                          help="Gemini cherche les infos du jour sur internet. "
+                               "Si l'option n'est pas disponible, l'analyse se fait sans.")
+    if st.button("🧹 Reset"):
+        st.session_state.pop("resultat", None)
+        st.rerun()
 
-txt_in = st.text_area("📋 Collez ici (ex: 12 FAKIR D4 1a)", height=150)
+conn, message_sheets = connexion_sheets()
+onglet_prono, onglet_histo = st.tabs(["🎯 Pronostic", "📊 Historique"])
 
-if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
-    df, lignes_ignorees = extraire_data_pro(txt_in)
-    if lignes_ignorees:
-        st.warning("⚠️ Lignes non reconnues (ignorées) :\n\n" + "\n\n".join(f"- `{l}`" for l in lignes_ignorees))
-    if not df.empty:
-        with st.spinner("🧪 Analyse des cotes et détection d'outsider..."):
-            raw, erreur = simulation_performance_max(df, hippo_input, discipline, capital, profil)
-            if erreur:
-                st.error(f"❌ {erreur}")
-            if raw:
+with onglet_prono:
+    txt_in = st.text_area("📋 Collez les partants copiés depuis le site, ou un cheval par ligne "
+                          "(ex: 12 FAKIR D4 1a 2a 4.5)", height=200)
+
+    if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
+        st.session_state.pop("resultat", None)
+        df, lignes_ignorees = tl.extraire_data_pro(txt_in)
+        if lignes_ignorees:
+            st.warning("⚠️ Lignes non reconnues (ignorées) :\n\n"
+                       + "\n\n".join(f"- `{l}`" for l in lignes_ignorees))
+        if df.empty:
+            st.error("Veuillez saisir des partants (ex: 12 NOM).")
+        else:
+            partants_str = "\n".join(f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows())
+            with st.spinner("🧪 Analyse des cotes et détection d'outsider..."):
                 try:
-                    res = extraire_json(raw)
-                    # On vérifie la réponse AVANT d'afficher quoi que ce soit
-                    podium = res['podium'][:5]
-                    for cle in ('r', 'd', 'm', 'ordre', 'pari_nom', 'pari_nums', 'mise', 'gain'):
-                        res[cle]
-                    for p in podium:
-                        p['n'], p['p']
-                    st.divider()
-                    
-                    # 1. BANDEAU INFO
-                    c1, c2, c3 = st.columns([1, 1, 2])
-                    color = "risk-low" if res['r'] == "Faible" else ("risk-med" if res['r'] == "Modéré" else "risk-high")
-                    c1.markdown(f"Risque : <span class='{color}'>{res['r']}</span>", unsafe_allow_html=True)
-                    c2.write(f"📍 {res['d']} | {res['m']}")
-                    c3.info(f"🏁 Ordre : **{res['ordre']}**")
-
-                    # 2. PODIUM (Numéro - Nom)
-                    st.divider()
-                    cols = st.columns(5)
-                    meds = ["🥇 1er", "🥈 2ème", "🥉 3ème", "🔥 OUT", "🏇 5ème"]
-                    for col, med, p in zip(cols, meds, podium):
-                        col.metric(med, p['n'], p['p'])
-
-                    # 3. TICKET FINAL (Numéros inclus)
-                    st.divider()
-                    l1, l2 = st.columns([2, 1])
-                    with l1:
-                        st.success(f"🎫 **{res['pari_nom']}** | Chevaux : **{res['pari_nums']}** | Mise : **{res['mise']} €**")
-                    with l2:
-                        st.metric("Gain Net Est.", res['gain'])
-
+                    raw, recherche_utilisee = analyser_course(
+                        partants_str, hippo_input, discipline, profil, recherche, API_KEY)
+                    res = tl.valider_reponse(tl.extraire_json(raw))
+                    st.session_state["resultat"] = {
+                        "res": res, "mise": tl.calculer_mise(capital, profil),
+                        "hippo": hippo_input, "discipline": discipline, "profil": profil,
+                        "recherche_demandee": recherche, "recherche_utilisee": recherche_utilisee,
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "enregistre": False,
+                    }
+                except tl.GeminiErreur as e:
+                    st.error(f"❌ {e}")
                 except (ValueError, KeyError, TypeError):
                     st.error("Erreur d'analyse de la réponse Gemini. Réessayez l'envoi.")
-    else: st.error("Veuillez saisir des partants (ex: 12 NOM).")
+
+    # Le résultat est gardé en mémoire : il reste affiché quand on clique sur « Enregistrer ».
+    r = st.session_state.get("resultat")
+    if r:
+        res = r["res"]
+        st.divider()
+        if r["recherche_demandee"] and not r["recherche_utilisee"]:
+            st.info("ℹ️ Recherche Google indisponible : analyse faite sans données du jour.")
+
+        # 1. BANDEAU INFO
+        c1, c2, c3 = st.columns([1, 1, 2])
+        color = ("risk-low" if res['r'] == "Faible"
+                 else "risk-med" if res['r'] == "Modéré" else "risk-high")
+        c1.markdown(f"Risque : <span class='{color}'>{res['r']}</span>", unsafe_allow_html=True)
+        c2.write(f"📍 {res['d']} | {res['m']}")
+        c3.info(f"🏁 Ordre : **{res['ordre']}**")
+
+        # 2. PODIUM (Numéro - Nom), l'outsider signalé par Gemini porte 🔥
+        st.divider()
+        cols = st.columns(5)
+        meds = ["🥇 1er", "🥈 2ème", "🥉 3ème", "🏇 4ème", "🏇 5ème"]
+        for col, med, p in zip(cols, meds, res['podium']):
+            col.metric(f"{med} 🔥 OUT" if p['out'] else med, p['n'], p['p'])
+
+        # 3. TICKET FINAL
+        st.divider()
+        l1, l2 = st.columns([2, 1])
+        with l1:
+            st.success(f"🎫 **{res['pari_nom']}** | Chevaux : **{res['pari_nums']}** "
+                       f"| Mise : **{r['mise']:.2f} €** ({r['profil']})")
+        with l2:
+            st.metric("Gain net estimé (pour 1 €, IA)", res['gain'])
+        st.caption("Les probabilités sont des estimations de l'IA, pas une garantie. "
+                   "Suivez vos résultats dans l'onglet Historique.")
+
+        if conn is not None:
+            if r["enregistre"]:
+                st.success("✅ Ticket enregistré dans l'historique.")
+            elif st.button("💾 Enregistrer le ticket"):
+                try:
+                    histo, existe = lire_historique(conn)
+                    ligne = tl.ligne_historique(r["date"], r["hippo"], r["discipline"],
+                                                r["profil"], res, r["mise"])
+                    ecrire_historique(conn, pd.concat([histo, pd.DataFrame([ligne])],
+                                                      ignore_index=True), existe)
+                    r["enregistre"] = True
+                    st.rerun()
+                except Exception:
+                    st.error("Impossible d'écrire dans le Google Sheet. "
+                             "Vérifiez qu'il est partagé avec le compte de service.")
+
+with onglet_histo:
+    if conn is None:
+        st.info(message_sheets)
+    else:
+        histo, existe = lire_historique(conn)
+        stats = tl.calculer_stats(histo)
+        m = st.columns(5)
+        m[0].metric("Tickets", f"{stats['nb_tickets']} ({stats['nb_resolus']} joués)")
+        m[1].metric("Réussite", f"{stats['reussite']:.0f} %")
+        m[2].metric("Misé", f"{stats['mise_totale']:.2f} €")
+        m[3].metric("Bénéfice", f"{stats['benefice']:+.2f} €")
+        m[4].metric("ROI", f"{stats['roi']:+.1f} %")
+
+        if histo.empty:
+            st.caption("Aucun ticket enregistré pour l'instant.")
+        else:
+            st.caption("Après la course, choisissez Gagné ou Perdu et indiquez la somme rapportée, "
+                       "puis enregistrez.")
+            histo["resultat"] = histo["resultat"].where(histo["resultat"].isin(tl.RESULTATS), "En attente")
+            histo["gain_reel"] = pd.to_numeric(histo["gain_reel"], errors="coerce").fillna(0.0)
+            modifie = st.data_editor(
+                histo, hide_index=True, width="stretch",
+                disabled=[c for c in tl.COLONNES_HISTORIQUE if c not in ("resultat", "gain_reel")],
+                column_config={
+                    "resultat": st.column_config.SelectboxColumn("Résultat", options=tl.RESULTATS),
+                    "gain_reel": st.column_config.NumberColumn("Rapporté (€)", min_value=0.0, format="%.2f"),
+                    "mise": st.column_config.NumberColumn("Mise (€)", format="%.2f"),
+                },
+            )
+            if st.button("💾 Enregistrer les résultats"):
+                try:
+                    ecrire_historique(conn, modifie, existe)
+                    st.success("✅ Résultats enregistrés.")
+                except Exception:
+                    st.error("Impossible d'écrire dans le Google Sheet.")
 
 st.divider()
-st.caption("Correction Pandas appliquée | Numéros Réels | Outsider 🔥 | Fond #bdc3c7")
+st.caption("Mise calculée selon le profil | Recherche Google | Outsider 🔥 | Historique Google Sheets")
