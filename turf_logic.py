@@ -189,7 +189,7 @@ def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
 
     chevaux : sortie de valider_reponse()['chevaux'] (num, p entre 0 et 1).
     budget_restant : pertes encore autorisées sur la période (None = pas de limite).
-    Retourne {"jouer", "raison", "pari", "analyse"}.
+    Retourne {"jouer", "raison" (phrase courte), "detail", "pari", "analyse"}.
     """
     regles = PROFILS[profil]
     marche = probas_marche(df)
@@ -207,11 +207,12 @@ def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
             "gain_espere": retenue * cote - 1 if retenue is not None else None,
         })
     analyse = pd.DataFrame(lignes).sort_values("proba_ia", ascending=False, na_position="last")
-    resultat = {"jouer": False, "pari": None, "analyse": analyse}
+    resultat = {"jouer": False, "pari": None, "analyse": analyse, "raison": None, "detail": None}
 
     if marche is None:
         manquantes = [str(n) for n in df.loc[df["COTE"].isna(), "NUM"]]
-        resultat["raison"] = (f"Cote manquante (n° {', '.join(manquantes)}) : le gain ne peut pas être mesuré. "
+        resultat["raison"] = f"Cote manquante (n° {', '.join(manquantes)})."
+        resultat["detail"] = ("Sans la cote de chaque partant, le gain ne peut pas être mesuré. "
                               "Collez les partants avec leurs cotes.")
         return resultat
 
@@ -221,11 +222,13 @@ def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
     candidats = [l for l in compatibles if l["gain_espere"] >= regles["ev_min"]]
     if not candidats:
         meilleur = max(compatibles, key=lambda l: l["gain_espere"], default=None)
-        detail = (f" Le meilleur cheval compatible (n° {meilleur['num']}) n'offre que "
-                  f"{meilleur['gain_espere']:+.0%} de gain espéré." if meilleur
-                  else " Aucun cheval n'a une probabilité et une cote compatibles avec ce profil.")
-        resultat["raison"] = (f"Pas de valeur mesurable pour le profil {profil} "
-                              f"({decrire_profil(profil)}).{detail}")
+        resultat["raison"] = f"Aucun cheval n'est assez intéressant pour le profil {profil}."
+        resultat["detail"] = (
+            f"Le meilleur, n° {meilleur['num']} {meilleur['nom']}, n'offre que "
+            f"{meilleur['gain_espere']:+.0%} de gain espéré : il faut au moins {regles['ev_min']:+.0%}."
+            if meilleur else
+            f"Aucun cheval n'a à la fois une probabilité ≥ {regles['p_min']:.0%} "
+            f"et une cote ≤ {regles['cote_max']}.")
         return resultat
 
     choix = max(candidats, key=lambda l: l["gain_espere"])
@@ -234,11 +237,13 @@ def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
     mise = round(max(float(capital), 0) * fraction, 2)
     if budget_restant is not None:
         if budget_restant <= 0:
-            resultat["raison"] = "Limite de pertes atteinte sur la période : pas de nouveau pari."
+            resultat["raison"] = "Limite de pertes atteinte sur 7 jours."
+            resultat["detail"] = "Aucun nouveau pari tant que les pertes de la semaine n'ont pas baissé."
             return resultat
         mise = round(min(mise, budget_restant), 2)
     if mise <= 0:
         resultat["raison"] = "Capital nul : pas de mise possible."
+        resultat["detail"] = "Indiquez votre capital dans la barre latérale."
         return resultat
 
     resultat.update(jouer=True, raison=None, pari={**choix, "type": "Simple Gagnant", "mise": mise,

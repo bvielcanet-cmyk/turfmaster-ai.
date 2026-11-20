@@ -104,7 +104,7 @@ def test_pas_de_pari_sans_cotes():
 def test_pas_de_pari_si_ia_suit_le_marche():
     m = tl.probas_marche(site())
     d = tl.evaluer_pari([{"num": n, "p": q} for n, q in m.items()], site(), 1000, "Offensif")
-    assert not d["jouer"] and "Pas de valeur mesurable" in d["raison"]
+    assert not d["jouer"] and "Aucun cheval n'est assez intéressant" in d["raison"] and d["detail"]
 
 
 def test_outsider_tres_cote_jamais_joue():
