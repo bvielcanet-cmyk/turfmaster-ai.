@@ -74,6 +74,15 @@ def textes(elements):
     return [e.value for e in elements]
 
 
+def verdict(at):
+    """Texte de l'encadré du verdict (À JOUER / NE PAS JOUER)."""
+    return " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
+
+
+def classement(at):
+    return " ".join(m.value for m in at.markdown if "tm-ligne" in m.value)
+
+
 def prompt(p, i=-1):
     return p.call_args_list[i].kwargs["json"]["contents"][0]["parts"][0]["text"]
 
@@ -95,28 +104,30 @@ def test_pari_conseille_avec_recherche():
     assert all("CLE-TEST" not in c.args[0] for c in p.call_args_list if c.args)
     assert "terrain : souple" in prompt(p).lower()  # contexte du jour transmis
     assert "Discipline : Obstacles" in prompt(p)  # détectée d'après la musique
-    succes = textes(at.success)[0]
-    assert "Simple Gagnant n° 4 FOREST DU PECOS" in succes and "cote 5.8" in succes
-    assert [m.label for m in at.metric][4] == "🏇 5ème 🔥 OUT"  # n° 6, outsider désigné par l'IA
-    assert any("Trio 5 - 4 - 1" in c and "aucune mise" in c for c in textes(at.caption))
+    v = verdict(at)
+    assert "✅ À JOUER" in v and "n° 4 FOREST DU PECOS" in v and "<b>5.8</b>" in v
+    c = classement(at)
+    assert c.index("LOKI DE LA BRUNIE") < c.index("FOREST DU PECOS")  # ordre de l'IA
+    assert "PARI" in c and "🔥 OUTSIDER" in c
+    assert any("Trio 5 - 4 - 1" in m and "non conseillé" in m for m in textes(at.markdown))
 
 
 def test_pas_de_pari_sans_valeur():
     at, _ = lancer([http(json_=SANS_VALEUR)])
-    assert not at.success
-    assert any("Pas de pari conseillé" in w and "Pas de valeur mesurable" in w for w in textes(at.warning))
+    v = verdict(at)
+    assert "🚫 NE PAS JOUER" in v and "Aucun cheval n&#x27;est assez intéressant" in v
 
 
 def test_pas_de_pari_sans_cotes():
     texte = "5 LOKI 1s 2s\n4 FOREST 1s 3s 5.8"
     reponse = {"chevaux": [{"num": "5", "p": 60}, {"num": "4", "p": 40}], "pari_nom": "Couplé", "pari_nums": "5 - 4"}
     at, _ = lancer([http(json_=reponse)], texte=texte, recherche=False)
-    assert any("Cote manquante (n° 5)" in w for w in textes(at.warning))
+    assert "Cote manquante (n° 5)" in verdict(at)
 
 
 def test_profil_prudent_refuse_cote_trop_haute():
     at, _ = lancer([http()], profil="Prudent")
-    assert not at.success and any("Pas de pari conseillé" in w for w in textes(at.warning))
+    assert "NE PAS JOUER" in verdict(at)
 
 
 def test_sans_recherche_un_seul_appel():
@@ -128,8 +139,8 @@ def test_sans_recherche_un_seul_appel():
 def test_recherche_indisponible():
     at, p = lancer([http()], contexte=http(429))
     assert p.call_count == 2
-    assert any("Recherche Google indisponible" in i for i in textes(at.info))
-    assert at.success  # l'analyse a quand même eu lieu, sans données du jour
+    assert any("Recherche Google indisponible" in c for c in textes(at.caption))
+    assert "À JOUER" in verdict(at)  # l'analyse a quand même eu lieu, sans données du jour
     assert "Aucune donnée du jour" in prompt(p)
 
 
@@ -146,12 +157,12 @@ def test_meme_course_en_cache():
     at, _ = lancer([http()])
     with mock.patch("requests.post", side_effect=[]) as p2:
         analyser(at).click().run()
-    assert p2.call_count == 0 and at.success
+    assert p2.call_count == 0 and "À JOUER" in verdict(at)
 
 
 def test_discipline_contradictoire_signalee():
     at, p = lancer([http()], discipline="Trot", recherche=False)
-    assert any("indique plutôt **Obstacles**" in i for i in textes(at.info))
+    assert any("indique plutôt **Obstacles**" in c for c in textes(at.caption))
     assert "Discipline : Trot" in prompt(p)
 
 
@@ -185,7 +196,7 @@ def test_saisie_vide_et_lignes_ignorees():
 def test_historique_desactive_et_limite_non_verifiee():
     at, _ = lancer([http()], recherche=False)
     assert any("Historique désactivé" in i for i in textes(at.info))
-    assert any("Limite de pertes non vérifiée" in i for i in textes(at.info))
+    assert any("Limite de pertes non vérifiée" in c for c in textes(at.caption))
     assert not [b for b in at.button if "Enregistrer" in b.label]
 
 
@@ -216,15 +227,14 @@ def test_limite_de_pertes_atteinte():
     feuille = mock.Mock()
     feuille.read.return_value = historique((maintenant(1), 60, "Perdu", 0), (maintenant(2), 50, "Perdu", 0))
     at, _ = lancer([http()], sheets=feuille, recherche=False)  # limite par défaut : 100 €
-    assert not at.success
-    assert any("Limite de pertes atteinte" in w for w in textes(at.warning))
+    assert "NE PAS JOUER" in verdict(at) and "Limite de pertes atteinte" in verdict(at)
 
 
 def test_limite_de_pertes_reduit_la_mise():
     feuille = mock.Mock()
     feuille.read.return_value = historique((maintenant(1), 97, "Perdu", 0))
     at, _ = lancer([http()], sheets=feuille, recherche=False)
-    assert "Mise : **3.00 €**" in textes(at.success)[0]
+    assert "3,00\u00a0€" in verdict(at)
 
 
 def test_stats_historique():

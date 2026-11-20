@@ -1,4 +1,5 @@
 from datetime import datetime
+from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -14,9 +15,39 @@ st.markdown("""
     [data-testid="stMetricLabel"] { color: #1a1a1a !important; font-weight: 700 !important; font-size: 13px !important; margin-bottom: -8px !important; }
     [data-testid="stMetric"] { background-color: #bdc3c7 !important; padding: 8px 10px !important; border-radius: 8px !important; border: 1px solid #7f8c8d !important; }
     .stButton>button { background-color: #000000; color: white; border-radius: 12px; font-weight: bold; }
-    .risk-low { color: #27ae60; font-weight: bold; }
-    .risk-med { color: #f39c12; font-weight: bold; }
-    .risk-high { color: #e74c3c; font-weight: bold; }
+
+    /* Verdict : lisible en thème clair comme sombre (couleurs semi-transparentes) */
+    .tm-verdict { border-radius: 14px; padding: 18px 20px; margin: 8px 0 18px; border: 2px solid; }
+    .tm-oui { border-color: #1e9e4a; background: rgba(30, 158, 74, .12); }
+    .tm-non { border-color: #d9822b; background: rgba(217, 130, 43, .12); }
+    .tm-titre { font-size: 1.7rem; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
+    .tm-oui .tm-titre { color: #1e9e4a; }
+    .tm-non .tm-titre { color: #d9822b; }
+    .tm-pari { font-size: 1.2rem; font-weight: 700; margin-top: 6px; }
+    .tm-chiffres { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 8px; }
+    .tm-chiffres div { flex: 1 1 110px; background: rgba(127, 127, 127, .14); border-radius: 10px; padding: 8px 12px; }
+    .tm-chiffres span { display: block; font-size: .8rem; opacity: .75; }
+    .tm-chiffres b { font-size: 1.5rem; }
+    .tm-chiffres small { display: block; font-size: .75rem; opacity: .75; }
+    .tm-pourquoi { opacity: .85; margin-top: 6px; }
+
+    /* Classement */
+    .tm-ligne { padding: 8px 12px; border-radius: 10px; margin-bottom: 6px; border: 1px solid rgba(127, 127, 127, .25); }
+    .tm-choisi { border: 2px solid #1e9e4a; background: rgba(30, 158, 74, .08); }
+    .tm-tete { display: flex; align-items: baseline; gap: 8px; }
+    .tm-rang { width: 1.4em; }
+    .tm-num { font-weight: 800; min-width: 1.8em; text-align: center; background: rgba(127, 127, 127, .2); border-radius: 6px; }
+    .tm-nom { font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tm-tag { font-size: .72rem; font-weight: 700; padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
+    .tm-tag-out { color: #d9822b; border: 1px solid #d9822b; }
+    .tm-tag-pari { color: #1e9e4a; border: 1px solid #1e9e4a; }
+    .tm-pct { font-weight: 800; font-size: 1.15rem; white-space: nowrap; }
+    .tm-barre { position: relative; height: 8px; border-radius: 4px; background: rgba(127, 127, 127, .2); margin-top: 6px; }
+    .tm-ia { height: 100%; border-radius: 4px; background: #3b82f6; }
+    .tm-marche { position: absolute; top: -3px; width: 3px; height: 14px; background: currentColor; opacity: .75; border-radius: 2px; }
+    .tm-sous { font-size: .8rem; opacity: .7; margin-top: 3px; }
+    .tm-legende { font-size: .8rem; opacity: .7; margin: 2px 0 10px; }
+    .tm-legende i { display: inline-block; vertical-align: middle; margin: 0 4px 0 2px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,11 +118,69 @@ def ecrire_historique(conn, df, existe):
 
 
 def pct(x):
-    return "—" if x is None or pd.isna(x) else f"{x:.0%}"
+    return "—" if x is None or pd.isna(x) else f"{x * 100:.0f}\u00a0%"
+
+
+def euros(x):
+    return f"{x:.2f}\u00a0€".replace(".", ",")
+
+
+def verdict_html(decision, profil):
+    """Grand encadré en tête de résultat : à jouer ou pas, en une ligne."""
+    pari = decision["pari"]
+    if not decision["jouer"]:
+        return (f'<div class="tm-verdict tm-non"><div class="tm-titre">🚫 NE PAS JOUER</div>'
+                f'<div class="tm-pari">{escape(decision["raison"])}</div>'
+                f'<div class="tm-pourquoi">{escape(decision["detail"] or "")}</div></div>')
+    cote_min = (1 + tl.PROFILS[profil]["ev_min"]) / pari["proba_retenue"]
+    part_capital = f"{pari['fraction'] * 100:.1f}".replace(".", ",")
+    return f"""<div class="tm-verdict tm-oui">
+<div class="tm-titre">✅ À JOUER</div>
+<div class="tm-pari">Simple Gagnant · n° {escape(pari['num'])} {escape(pari['nom'])}</div>
+<div class="tm-chiffres">
+<div><span>Mise</span><b>{euros(pari['mise'])}</b><small>{part_capital}\u00a0% du capital</small></div>
+<div><span>Cote</span><b>{pari['cote']:g}</b><small>à jouer si elle reste ≥ {cote_min:.1f}</small></div>
+<div><span>Gain espéré</span><b>{pari['gain_espere'] * 100:+.0f}\u00a0%</b><small>par euro misé</small></div>
+</div>
+<div class="tm-pourquoi">Pourquoi : l'IA lui donne <b>{pct(pari['proba_ia'])}</b> de chances de gagner,
+les cotes seulement <b>{pct(pari['proba_marche'])}</b>.</div>
+</div>"""
+
+
+def classement_html(res, decision):
+    """Les 5 chevaux préférés de l'IA, avec une barre IA et un trait pour les cotes."""
+    marche = {l["num"]: l["proba_marche"] for _, l in decision["analyse"].iterrows()}
+    cotes = {l["num"]: l["cote"] for _, l in decision["analyse"].iterrows()}
+    num_pari = decision["pari"]["num"] if decision["jouer"] else None
+    top = res["chevaux"][:5]
+    echelle = max([c["p"] for c in top] + [marche.get(c["num"]) or 0 for c in top]) or 1
+    rangs = ["🥇", "🥈", "🥉", "4", "5"]
+    lignes = []
+    for rang, c in zip(rangs, top):
+        q, cote = marche.get(c["num"]), cotes.get(c["num"])
+        tags = ""
+        if c["num"] == num_pari:
+            tags += '<span class="tm-tag tm-tag-pari">PARI</span>'
+        if c["out"]:
+            tags += '<span class="tm-tag tm-tag-out">🔥 OUTSIDER</span>'
+        trait = f'<div class="tm-marche" style="left:{q / echelle * 100:.1f}%"></div>' if q is not None else ""
+        sous = " · ".join(x for x in [f"cotes {pct(q)}" if q is not None else "",
+                                      f"cote {cote:g}" if cote else "pas de cote"] if x)
+        lignes.append(
+            f'<div class="tm-ligne{" tm-choisi" if c["num"] == num_pari else ""}">'
+            f'<div class="tm-tete"><span class="tm-rang">{rang}</span><span class="tm-num">{escape(c["num"])}</span>'
+            f'<span class="tm-nom">{escape(c["nom"])}</span>{tags}<span class="tm-pct">{pct(c["p"])}</span></div>'
+            f'<div class="tm-barre"><div class="tm-ia" style="width:{c["p"] / echelle * 100:.1f}%"></div>{trait}</div>'
+            f'<div class="tm-sous">{sous}</div></div>')
+    legende = ('<div class="tm-legende">Chances de gagner : '
+               '<i style="width:18px;height:8px;border-radius:4px;background:#3b82f6"></i>selon l\'IA, '
+               '<i style="width:3px;height:12px;background:currentColor;opacity:.75"></i>selon les cotes</div>')
+    return legende + "".join(lignes)
 
 
 # --- 3. INTERFACE ---
 st.title("🚀 TurfMaster 2.5 : Ultimate Investor")
+st.caption("Collez la course : l'application vous dit **s'il faut jouer**, sur quel cheval et combien.")
 
 with st.sidebar:
     hippo_input = st.text_input("Hippodrome", value="Vincennes")
@@ -99,7 +188,9 @@ with st.sidebar:
     st.divider()
     capital = st.number_input("Capital (€)", value=1000, min_value=0)
     profil = st.select_slider("Profil de Risque", list(tl.PROFILS), value="Équilibré")
-    st.caption(f"Pari conseillé seulement si : {tl.decrire_profil(profil)}.")
+    regles = tl.PROFILS[profil]
+    st.caption(f"Joue seulement si le gain espéré atteint **{regles['ev_min'] * 100:+.0f}\u00a0%** "
+               f"et la cote **≤ {regles['cote_max']}**. Mise max **{regles['plafond']:.0%}** du capital.")
     limite_pertes = st.number_input("Perte max sur 7 jours (€, 0 = sans limite)", value=100, min_value=0,
                                     help="Vérifiée avec l'historique Google Sheets.")
     recherche = st.toggle("🔎 Recherche Google (météo, terrain, distance)", value=True,
@@ -115,7 +206,7 @@ with onglet_prono:
     txt_in = st.text_area("📋 Collez les partants copiés depuis le site (avec les cotes), ou un cheval par ligne "
                           "(ex: 12 FAKIR D4 1a 2a 4.5)", height=200)
 
-    if st.button("⚡ ANALYSER LA COURSE"):
+    if st.button("⚡ ANALYSER LA COURSE", width="stretch"):
         st.session_state.pop("resultat", None)
         df, lignes_ignorees = tl.extraire_data_pro(txt_in)
         if lignes_ignorees:
@@ -171,58 +262,36 @@ with onglet_prono:
     r = st.session_state.get("resultat")
     if r:
         res, decision = r["res"], r["decision"]
-        st.divider()
-        for note in r["notes"]:
-            st.info(f"ℹ️ {note}")
+        pari = decision["pari"]
+
+        # 1. LE VERDICT, en gros
+        st.markdown(verdict_html(decision, r["profil"]), unsafe_allow_html=True)
         for alerte in r["alertes"]:
             st.warning(f"⚠️ {alerte}")
+        for note in r["notes"]:
+            st.caption(f"ℹ️ {note}")
 
-        # 1. BANDEAU INFO
-        c1, c2, c3 = st.columns([1, 1, 2])
-        color = ("risk-low" if res['r'] == "Faible"
-                 else "risk-med" if res['r'] == "Modéré" else "risk-high")
-        c1.markdown(f"Risque course : <span class='{color}'>{res['r']}</span>", unsafe_allow_html=True)
-        c2.write(f"📍 {res['d']} | {res['m']} | {r['discipline']}")
-        c3.info(f"🏁 Ordre IA : **{' - '.join(c['num'] for c in res['chevaux'][:3])}**")
+        # 2. LE CLASSEMENT
+        st.markdown("#### 🏁 Classement de l'IA")
+        st.markdown(classement_html(res, decision), unsafe_allow_html=True)
+        st.caption(f"{r['discipline']} · {r['hippo']} · météo {res['m']} · distance {res['d']} · "
+                   f"course jugée : {res['r']}")
 
-        # 2. PODIUM : probabilité IA comparée à celle des cotes
-        st.divider()
-        marche = {l["num"]: l["proba_marche"] for _, l in decision["analyse"].iterrows()}
-        cols = st.columns(5)
-        meds = ["🥇 1er", "🥈 2ème", "🥉 3ème", "🏇 4ème", "🏇 5ème"]
-        for col, med, c in zip(cols, meds, res["chevaux"][:5]):
-            col.metric(f"{med} 🔥 OUT" if c["out"] else med, f"{c['num']} - {c['nom']}")
-            col.caption(f"IA **{pct(c['p'])}** · cotes {pct(marche.get(c['num']))}")
-
-        # 3. DÉCISION
-        st.divider()
-        pari = decision["pari"]
-        if decision["jouer"]:
-            cote_min = (1 + tl.PROFILS[r["profil"]]["ev_min"]) / pari["proba_retenue"]
-            st.success(f"✅ **Pari conseillé : Simple Gagnant n° {pari['num']} {pari['nom']}** "
-                       f"| cote {pari['cote']:g} | Mise : **{pari['mise']:.2f} €** "
-                       f"({pari['fraction']:.1%} du capital, profil {r['profil']})")
-            st.caption(f"Probabilité retenue {pct(pari['proba_retenue'])} (IA {pct(pari['proba_ia'])}, "
-                       f"cotes {pct(pari['proba_marche'])}) → gain espéré **{pari['gain_espere']:+.0%}** "
-                       f"par euro misé. Les cotes bougent jusqu'au départ : ne jouez que si la cote "
-                       f"reste **≥ {cote_min:.1f}**.")
-        else:
-            st.warning(f"🚫 **Pas de pari conseillé.** {decision['raison']}")
-        if res["combine"]:
-            st.caption(f"💡 Idée de combiné de l'IA : {res['combine']['nom']} {res['combine']['nums']} — "
-                       "son gain ne peut pas être mesuré (rapports inconnus), donc aucune mise n'est conseillée.")
-
-        with st.expander("📊 Analyse de valeur de tous les partants"):
+        # 3. LE DÉTAIL, pour qui veut comprendre
+        with st.expander("🔍 Détails du calcul"):
+            if res["combine"]:
+                st.markdown(f"💡 **Idée de combiné de l'IA : {res['combine']['nom']} "
+                            f"{res['combine']['nums']}** — non conseillé : son gain ne peut pas être "
+                            "mesuré sans les rapports.")
             tableau = decision["analyse"].rename(columns={
                 "num": "N°", "nom": "Cheval", "cote": "Cote", "proba_ia": "Proba IA",
                 "proba_marche": "Proba cotes", "proba_retenue": "Proba retenue", "gain_espere": "Gain espéré"})
             st.dataframe(tableau, hide_index=True, width="stretch", column_config={
                 c: st.column_config.NumberColumn(c, format="percent")
                 for c in ("Proba IA", "Proba cotes", "Proba retenue", "Gain espéré")})
-            st.caption(f"Probabilité retenue = moyenne entre l'IA et les cotes ({tl.CONFIANCE_IA:.0%} IA). "
-                       "Gain espéré = probabilité retenue × cote − 1.")
-        st.caption("Les probabilités de l'IA sont des estimations, pas une garantie. "
-                   "Suivez vos résultats dans l'onglet Historique.")
+            st.caption(f"Proba retenue = moyenne entre l'IA et les cotes. Gain espéré = proba retenue × cote − 1. "
+                       f"Règles du profil {r['profil']} : {tl.decrire_profil(r['profil'])}. "
+                       "Les probabilités de l'IA sont des estimations, pas une garantie.")
 
         if conn is not None and decision["jouer"]:
             if r["enregistre"]:
