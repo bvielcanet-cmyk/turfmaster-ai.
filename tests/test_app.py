@@ -32,13 +32,47 @@ def http(code=200, texte=None, json_=AVEC_VALEUR):
 CONTEXTE = http(texte="Météo : soleil. Terrain : souple. Prix X : 3500 m.")
 
 
+def http_presse(sources, consultees=("paris-turf.com", "equidia.fr", "geny.com")):
+    """Réponse de la recherche de pronostics, avec les pages réellement consultées."""
+    r = http(json_={"sources": sources})
+    r.json.return_value["candidates"][0]["groundingMetadata"] = {
+        "groundingChunks": [{"web": {"uri": f"https://redirect.example/{d}", "title": d}} for d in consultees]}
+    return r
+
+
+PRESSE = http_presse([
+    {"nom": "Paris-Turf", "site": "paris-turf.com", "selection": ["5", "4", "1", "3", "6"]},
+    {"nom": "Equidia", "site": "www.equidia.fr", "selection": ["4", "5", "3"]},
+    {"nom": "Geny", "site": "geny.com", "selection": ["5", "1", "4", "15"]},
+    {"nom": "Site inventé", "site": "pronos-inventes.fr", "selection": ["7", "2"]},
+])
+
+
+def gemini_simule(analyses, contexte=CONTEXTE, presse=PRESSE):
+    """Faux Gemini qui répond selon la demande (les recherches tournent en parallèle)."""
+    file = list(analyses)
+
+    def post(url, json=None, **kw):
+        if "tools" in json:
+            reponse = presse if "PRONOSTICS" in json["contents"][0]["parts"][0]["text"] else contexte
+        else:
+            if not file:
+                raise AssertionError("analyse Gemini inattendue")
+            reponse = file.pop(0)
+        if isinstance(reponse, Exception):
+            raise reponse
+        return reponse
+    return post
+
+
 @pytest.fixture(autouse=True)
 def vider_cache():
     st.cache_data.clear()
+    st.cache_resource.clear()
 
 
 def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profil=None,
-           recherche=True, discipline=None, limite=None, contexte=CONTEXTE):
+           recherche=True, discipline=None, limite=None, contexte=CONTEXTE, presse=None):
     at = AppTest.from_file(APP, default_timeout=30)
     if secrets:
         at.secrets["gemini"] = {"api_key": "CLE-TEST"}
@@ -47,9 +81,8 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
         at.secrets["autre"] = {"x": 1}
     if sheets is not None:
         at.secrets["connections"] = {"gsheets": {"type": "service_account"}}
-    if reponses is not None and recherche:
-        reponses = [contexte] + reponses
-    with mock.patch("requests.post", side_effect=exc or reponses) as p, \
+    effet = exc or gemini_simule(reponses or [], contexte, presse)
+    with mock.patch("requests.post", side_effect=effet) as p, \
             mock.patch("streamlit.connection", return_value=sheets):
         at.run()
         if at.text_area:
@@ -57,6 +90,8 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
                 at.select_slider[0].set_value(profil)
             if not recherche:
                 at.toggle[0].set_value(False)
+            if presse is None:
+                at.toggle[1].set_value(False)  # pronostics de la presse désactivés par défaut dans les tests
             if discipline:
                 at.selectbox[0].set_value(discipline)
             if limite is not None:
@@ -244,3 +279,51 @@ def test_stats_historique():
     valeurs = {m.label: m.value for m in at.metric}
     assert valeurs["Bénéfice"] == "+10.00 €" and valeurs["ROI"] == "+25.0 %"
     assert valeurs["Perte 7 jours"] == "0.00 € / 100 €"
+
+
+# --- Pronostics de la presse ------------------------------------------------
+
+def test_presse_compilee_et_verifiee():
+    at, p = lancer([http()], presse=PRESSE)
+    assert not at.exception and not at.error
+    assert p.call_count == 3  # contexte + presse (en parallèle) + analyse
+    md = " ".join(textes(at.markdown))
+    assert "Ce que disent les pronostiqueurs" in md
+    assert "Sources (3)" in md and "Site inventé" not in md
+    assert any("1 source(s) écartée(s) (Site inventé)" in c and "3 sites réellement consultés" in c
+               for c in textes(at.caption))
+    assert any("Geny cite des numéros absents (15)" in w for w in textes(at.warning))
+    # consensus transmis à l'IA
+    assert "PRONOSTICS PUBLIÉS" in prompt(p) and "n° 5 LOKI DE LA BRUNIE : 14 pts, cité par 3/3" in prompt(p)
+    # verdict et classement indiquent l'avis de la presse
+    assert "Pronostiqueurs : <b>cité par 3 sources sur 3 (1er choix de 1)</b>" in verdict(at)
+    assert "📰 cité par 3 sources sur 3 (1er choix de 2)" in classement(at)
+
+
+def test_presse_seulement_des_sources_inventees():
+    inventee = http_presse([{"nom": "X", "site": "x-invente.fr", "selection": ["5"]}], consultees=("autre.fr",))
+    at, p = lancer([http()], presse=inventee)
+    assert any("Aucun pronostic vérifiable" in c for c in textes(at.caption))
+    assert "PRONOSTICS PUBLIÉS" not in prompt(p)
+
+
+def test_presse_indisponible():
+    at, _ = lancer([http()], presse=http(429))
+    assert any("Pronostics de la presse indisponibles" in c for c in textes(at.caption))
+    assert "À JOUER" in verdict(at)
+
+
+def test_presse_gardee_en_memoire():
+    at, p = lancer([http()], presse=PRESSE)
+    autre = SITE.replace("6.5", "6.4")  # même course, cote qui a bougé
+    with mock.patch("requests.post", side_effect=gemini_simule([http()])) as p2:
+        at.text_area[0].input(autre)
+        analyser(at).click().run()
+    assert p2.call_count == 1  # ni recherche du jour ni pronostics refaits
+
+
+
+def test_presse_sans_page_consultee():
+    sans_pages = http_presse([{"nom": "Paris-Turf", "site": "paris-turf.com", "selection": ["5"]}], consultees=())
+    at, _ = lancer([http()], presse=sans_pages)
+    assert any("aucune page vérifiable" in c and "(Paris-Turf)" in c for c in textes(at.caption))

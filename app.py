@@ -1,3 +1,5 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from html import escape
 
@@ -46,6 +48,8 @@ st.markdown("""
     .tm-ia { height: 100%; border-radius: 4px; background: #3b82f6; }
     .tm-marche { position: absolute; top: -3px; width: 3px; height: 14px; background: currentColor; opacity: .75; border-radius: 2px; }
     .tm-sous { font-size: .8rem; opacity: .7; margin-top: 3px; }
+    .tm-presse { background: #8b5cf6; }
+    .tm-sources a { margin-right: 10px; }
     .tm-legende { font-size: .8rem; opacity: .7; margin: 2px 0 10px; }
     .tm-legende i { display: inline-block; vertical-align: middle; margin: 0 4px 0 2px; }
 </style>
@@ -65,17 +69,53 @@ AUTO = "Auto (d'après la musique)"
 
 # --- 2. SERVICES ---
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
-def contexte_du_jour(hippo, discipline, jour, _api_key):
-    """Recherche Google faite une fois par hippodrome et par jour (6 h de cache)."""
-    return tl.rechercher_contexte(_api_key, hippo, discipline, jour)
+@st.cache_resource
+def memoire_recherches():
+    """Mémoire partagée des recherches Google : {clé: (heure, résultat)}.
+    Utilisable depuis plusieurs fils d'exécution (les deux recherches tournent en parallèle)."""
+    return {}
+
+
+def en_memoire(memoire, cle, duree, calcul):
+    """Renvoie le résultat gardé en mémoire s'il a moins de `duree` secondes, sinon le calcule.
+    Les erreurs ne sont pas gardées."""
+    deja = memoire.get(cle)
+    if deja and time.time() - deja[0] < duree:
+        return deja[1]
+    resultat = calcul()
+    memoire[cle] = (time.time(), resultat)
+    return resultat
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def analyser_course(partants_str, hippo, discipline, profil, contexte, _api_key):
+def analyser_course(partants_str, hippo, discipline, profil, contexte, presse, _api_key):
     """Analyse mise en cache 1 h : recoller la même course ne consomme pas de quota.
     Les erreurs (exceptions) ne sont jamais mises en cache."""
-    return tl.analyser(_api_key, tl.construire_prompt(partants_str, hippo, discipline, profil, contexte))
+    return tl.analyser(_api_key, tl.construire_prompt(partants_str, hippo, discipline, profil, contexte, presse))
+
+
+def lancer_recherches(hippo, discipline, partants_str, avec_contexte, avec_presse):
+    """Recherche du jour (météo, terrain) et pronostics publiés, en parallèle.
+    Retourne {"contexte": texte ou GeminiErreur, "presse": (texte, sources) ou GeminiErreur}."""
+    memoire = memoire_recherches()
+    jour = datetime.now().strftime("%d/%m/%Y")
+    taches = {}
+    if avec_contexte:
+        taches["contexte"] = (("contexte", hippo, discipline, jour), 6 * 3600,
+                              lambda: tl.rechercher_contexte(API_KEY, hippo, discipline, jour))
+    if avec_presse:
+        noms = "\n".join(l.split(" (")[0] for l in partants_str.splitlines())
+        taches["presse"] = (("presse", hippo, jour, noms), 3 * 3600,
+                            lambda: tl.rechercher_pronostics(API_KEY, hippo, discipline, jour, noms))
+    resultats = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futurs = {nom: pool.submit(en_memoire, memoire, *t) for nom, t in taches.items()}
+        for nom, futur in futurs.items():
+            try:
+                resultats[nom] = futur.result()
+            except tl.GeminiErreur as e:
+                resultats[nom] = e
+    return resultats
 
 
 def connexion_sheets():
@@ -125,7 +165,19 @@ def euros(x):
     return f"{x:.2f}\u00a0€".replace(".", ",")
 
 
-def verdict_html(decision, profil):
+def avis_presse(num, compil):
+    """« cité par 3 sources sur 5 (1er choix de 2) », ou None sans pronostics."""
+    if not compil or not compil["sources"]:
+        return None
+    n = len(compil["sources"])
+    e = next((e for e in compil["consensus"] if e["num"] == num), None)
+    if e is None:
+        return f"cité par aucune des {n} sources"
+    texte = f"cité par {e['citations']} source{'s' if e['citations'] > 1 else ''} sur {n}"
+    return texte + (f" (1er choix de {e['premier']})" if e["premier"] else "")
+
+
+def verdict_html(decision, profil, compil=None):
     """Grand encadré en tête de résultat : à jouer ou pas, en une ligne."""
     pari = decision["pari"]
     if not decision["jouer"]:
@@ -134,6 +186,11 @@ def verdict_html(decision, profil):
                 f'<div class="tm-pourquoi">{escape(decision["detail"] or "")}</div></div>')
     cote_min = (1 + tl.PROFILS[profil]["ev_min"]) / pari["proba_retenue"]
     part_capital = f"{pari['fraction'] * 100:.1f}".replace(".", ",")
+    avis = avis_presse(pari["num"], compil)
+    ligne_presse = ""
+    if avis:
+        alerte = " ⚠️" if avis.startswith("cité par aucune") else ""
+        ligne_presse = f"<br>📰 Pronostiqueurs : <b>{escape(avis)}</b>{alerte}."
     return f"""<div class="tm-verdict tm-oui">
 <div class="tm-titre">✅ À JOUER</div>
 <div class="tm-pari">Simple Gagnant · n° {escape(pari['num'])} {escape(pari['nom'])}</div>
@@ -143,11 +200,11 @@ def verdict_html(decision, profil):
 <div><span>Gain espéré</span><b>{pari['gain_espere'] * 100:+.0f}\u00a0%</b><small>par euro misé</small></div>
 </div>
 <div class="tm-pourquoi">Pourquoi : l'IA lui donne <b>{pct(pari['proba_ia'])}</b> de chances de gagner,
-les cotes seulement <b>{pct(pari['proba_marche'])}</b>.</div>
+les cotes seulement <b>{pct(pari['proba_marche'])}</b>.{ligne_presse}</div>
 </div>"""
 
 
-def classement_html(res, decision):
+def classement_html(res, decision, compil=None):
     """Les 5 chevaux préférés de l'IA, avec une barre IA et un trait pour les cotes."""
     marche = {l["num"]: l["proba_marche"] for _, l in decision["analyse"].iterrows()}
     cotes = {l["num"]: l["cote"] for _, l in decision["analyse"].iterrows()}
@@ -165,7 +222,8 @@ def classement_html(res, decision):
             tags += '<span class="tm-tag tm-tag-out">🔥 OUTSIDER</span>'
         trait = f'<div class="tm-marche" style="left:{q / echelle * 100:.1f}%"></div>' if q is not None else ""
         sous = " · ".join(x for x in [f"cotes {pct(q)}" if q is not None else "",
-                                      f"cote {cote:g}" if cote else "pas de cote"] if x)
+                                      f"cote {cote:g}" if cote else "pas de cote",
+                                      f"📰 {avis_presse(c['num'], compil)}" if avis_presse(c['num'], compil) else ""] if x)
         lignes.append(
             f'<div class="tm-ligne{" tm-choisi" if c["num"] == num_pari else ""}">'
             f'<div class="tm-tete"><span class="tm-rang">{rang}</span><span class="tm-num">{escape(c["num"])}</span>'
@@ -176,6 +234,21 @@ def classement_html(res, decision):
                '<i style="width:18px;height:8px;border-radius:4px;background:#3b82f6"></i>selon l\'IA, '
                '<i style="width:3px;height:12px;background:currentColor;opacity:.75"></i>selon les cotes</div>')
     return legende + "".join(lignes)
+
+
+def presse_html(compil):
+    """Consensus des pronostiqueurs : une ligne par cheval cité, barre = points."""
+    n = len(compil["sources"])
+    maxi = max(e["points"] for e in compil["consensus"])
+    lignes = []
+    for e in compil["consensus"][:6]:
+        premier = f" · 1er choix de {e['premier']}" if e["premier"] else ""
+        lignes.append(
+            f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-num">{escape(e["num"])}</span>'
+            f'<span class="tm-nom">{escape(e["nom"])}</span><span class="tm-pct">{e["points"]}\u00a0pts</span></div>'
+            f'<div class="tm-barre"><div class="tm-ia tm-presse" style="width:{e["points"] / maxi * 100:.1f}%"></div></div>'
+            f'<div class="tm-sous">cité par {e["citations"]}/{n}{premier}</div></div>')
+    return "".join(lignes)
 
 
 # --- 3. INTERFACE ---
@@ -195,6 +268,9 @@ with st.sidebar:
                                     help="Vérifiée avec l'historique Google Sheets.")
     recherche = st.toggle("🔎 Recherche Google (météo, terrain, distance)", value=True,
                           help="Faite une fois par hippodrome et par jour, puis réutilisée.")
+    avec_presse = st.toggle("📰 Pronostics de la presse", value=True,
+                            help="Cherche les pronostics publiés pour la course et les compile. "
+                                 "Seules les sources réellement trouvées par la recherche sont gardées.")
     if st.button("🧹 Reset"):
         st.session_state.pop("resultat", None)
         st.rerun()
@@ -226,17 +302,30 @@ with onglet_prono:
                                  f"alors que vous avez choisi **{discipline}**.")
             partants_str = "\n".join(f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows())
 
-            with st.spinner("🧪 Analyse de la course et calcul de la valeur..."):
+            with st.spinner("🧪 Recherches, analyse de la course et calcul de la valeur..."):
                 try:
-                    contexte = None
-                    if recherche:
-                        try:
-                            contexte = contexte_du_jour(hippo_input, discipline,
-                                                        datetime.now().strftime("%d/%m/%Y"), API_KEY)
-                        except tl.GeminiErreur as e:
-                            notes.append(f"Recherche Google indisponible ({e}) : analyse sans données du jour.")
-                    raw = analyser_course(partants_str, hippo_input, discipline, profil, contexte, API_KEY)
+                    recherches = lancer_recherches(hippo_input, discipline, partants_str, recherche, avec_presse)
+                    contexte = recherches.get("contexte")
+                    if isinstance(contexte, tl.GeminiErreur):
+                        notes.append(f"Recherche Google indisponible ({contexte}) : analyse sans données du jour.")
+                        contexte = None
+
+                    compil, alertes_presse = None, []
+                    if avec_presse:
+                        trouve = recherches["presse"]
+                        if isinstance(trouve, tl.GeminiErreur):
+                            notes.append(f"Pronostics de la presse indisponibles ({trouve}).")
+                        else:
+                            try:
+                                compil = tl.compiler_pronostics(tl.extraire_json(trouve[0]), trouve[1], df)
+                                alertes_presse = compil["alertes"]
+                            except ValueError:
+                                notes.append("Pronostics de la presse illisibles : ignorés.")
+
+                    raw = analyser_course(partants_str, hippo_input, discipline, profil, contexte,
+                                          tl.texte_consensus(compil), API_KEY)
                     res, alertes = tl.valider_reponse(tl.extraire_json(raw), df)
+                    alertes += alertes_presse
 
                     budget = None
                     if limite_pertes > 0:
@@ -249,7 +338,7 @@ with onglet_prono:
                     decision = tl.evaluer_pari(res["chevaux"], df, capital, profil, budget)
 
                     st.session_state["resultat"] = {
-                        "res": res, "decision": decision, "alertes": alertes, "notes": notes,
+                        "res": res, "decision": decision, "alertes": alertes, "notes": notes, "presse": compil,
                         "hippo": hippo_input, "discipline": discipline, "profil": profil,
                         "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "enregistre": False,
                     }
@@ -265,7 +354,8 @@ with onglet_prono:
         pari = decision["pari"]
 
         # 1. LE VERDICT, en gros
-        st.markdown(verdict_html(decision, r["profil"]), unsafe_allow_html=True)
+        compil = r.get("presse")
+        st.markdown(verdict_html(decision, r["profil"], compil), unsafe_allow_html=True)
         for alerte in r["alertes"]:
             st.warning(f"⚠️ {alerte}")
         for note in r["notes"]:
@@ -273,11 +363,34 @@ with onglet_prono:
 
         # 2. LE CLASSEMENT
         st.markdown("#### 🏁 Classement de l'IA")
-        st.markdown(classement_html(res, decision), unsafe_allow_html=True)
+        st.markdown(classement_html(res, decision, compil), unsafe_allow_html=True)
         st.caption(f"{r['discipline']} · {r['hippo']} · météo {res['m']} · distance {res['d']} · "
                    f"course jugée : {res['r']}")
 
-        # 3. LE DÉTAIL, pour qui veut comprendre
+        # 3. LES PRONOSTIQUEURS
+        if compil is not None:
+            st.markdown("#### 📰 Ce que disent les pronostiqueurs")
+            if compil["sources"]:
+                st.markdown(presse_html(compil), unsafe_allow_html=True)
+                liens = " ".join(f'<a href="{escape(s["url"] or "#")}" target="_blank">{escape(s["nom"])}</a>'
+                                 for s in compil["sources"])
+                st.markdown(f'<div class="tm-sous tm-sources">Sources ({len(compil["sources"])}) : {liens}</div>',
+                            unsafe_allow_html=True)
+                st.caption("Points : 1er choix d'une source = 5 pts, 2e = 4 … 5e = 1. "
+                           "Cet avis est transmis à l'IA, mais ne décide jamais seul d'un pari.")
+            else:
+                st.caption("Aucun pronostic vérifiable trouvé pour cette course.")
+            if compil["ecartees"]:
+                noms = ", ".join(compil["ecartees_noms"])
+                if compil["nb_consultees"] == 0:
+                    st.caption(f"{compil['ecartees']} source(s) écartée(s) ({noms}) : la recherche n'a renvoyé "
+                               "aucune page vérifiable, impossible de confirmer qu'elles existent.")
+                else:
+                    st.caption(f"{compil['ecartees']} source(s) écartée(s) ({noms}) : introuvable(s) parmi les "
+                               f"{compil['nb_consultees']} sites réellement consultés par la recherche "
+                               "(risque d'invention).")
+
+        # 4. LE DÉTAIL, pour qui veut comprendre
         with st.expander("🔍 Détails du calcul"):
             if res["combine"]:
                 st.markdown(f"💡 **Idée de combiné de l'IA : {res['combine']['nom']} "
