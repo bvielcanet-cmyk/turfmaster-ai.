@@ -20,31 +20,68 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if "gemini" in st.secrets:
+# st.secrets lève une exception si aucun fichier secrets.toml n'existe :
+# on l'attrape pour afficher le message au lieu de planter.
+try:
     API_KEY = st.secrets["gemini"]["api_key"]
-else:
-    st.error("❌ Configurez votre API KEY dans les Secrets.")
+except Exception:
+    st.error("❌ Configurez votre API KEY dans les Secrets ([gemini] api_key = \"...\").")
     st.stop()
 
 # --- 2. FONCTIONS DE CALCUL ---
 
+RE_FER = re.compile(r'^(D4|DP|DA)$', re.IGNORECASE)
+RE_MUSIQUE = re.compile(r'\b\d{1,2}[admphsc]\b|\b[A-Z]D\b|\bD[admp]\b')
+
+def _est_fin_du_nom(mot):
+    """Un mot qui n'appartient plus au nom : ferrure, musique, chiffre, parenthèse."""
+    return bool(
+        RE_FER.match(mot)
+        or RE_MUSIQUE.fullmatch(mot)
+        or re.match(r'^\d', mot)
+        or mot.startswith('(')
+        or not re.search(r'[A-Za-zÀ-ÿ]', mot)  # "---", "*", etc.
+    )
+
 def extraire_data_pro(texte):
-    lignes = texte.strip().split('\n')
-    data = []
-    for ligne in lignes:
-        num_match = re.search(r'^(\d{1,2})', ligne.strip())
-        nom_match = re.findall(r'[A-Z]{4,}', ligne)
-        fer = re.findall(r'\bD4\b|\bDP\b|\bDA\b', ligne)
-        musique = re.findall(r'\b\d[admp]\b|\b[A-Z]D\b', ligne)
-        
-        if nom_match:
-            numero = num_match.group(1) if num_match else "?"
-            data.append({
-                "FULL_ID": f"{numero} - {nom_match[0]}",
-                "NUM": numero,
-                "Info": f"{fer[0] if fer else 'F'} | {' '.join(musique) if musique else 'N/A'}"
-            })
-    return pd.DataFrame(data)
+    """Retourne (DataFrame des partants, liste des lignes non reconnues)."""
+    data, ignorees = [], []
+    for ligne in texte.strip().split('\n'):
+        ligne = ligne.strip()
+        if not ligne:
+            continue
+        num_match = re.match(r'^(\d{1,2})\s*[.\-):]?\s*', ligne)
+        numero = num_match.group(1) if num_match else "?"
+        reste = ligne[num_match.end():] if num_match else ligne
+
+        # Le nom = tous les mots jusqu'à la ferrure / la musique (accents et noms courts acceptés)
+        mots = reste.split()
+        nom_mots = []
+        for mot in mots:
+            if _est_fin_du_nom(mot):
+                break
+            nom_mots.append(mot)
+        nom = " ".join(nom_mots).upper()
+        if not re.search(r'[A-ZÀ-Ý]', nom):  # pas de lettre = pas un nom de cheval
+            ignorees.append(ligne)
+            continue
+
+        suite = " ".join(mots[len(nom_mots):])
+        fer = [m for m in re.findall(r'[A-Za-z0-9]+', suite) if RE_FER.match(m)]
+        musique = RE_MUSIQUE.findall(suite)
+        data.append({
+            "FULL_ID": f"{numero} - {nom}",
+            "NUM": numero,
+            "Info": f"{fer[0].upper() if fer else 'F'} | {' '.join(musique) if musique else 'N/A'}"
+        })
+    return pd.DataFrame(data), ignorees
+
+def extraire_json(texte):
+    """Récupère l'objet JSON même si Gemini ajoute du texte ou des ``` autour."""
+    debut, fin = texte.find('{'), texte.rfind('}')
+    if debut == -1 or fin == -1:
+        raise ValueError("Aucun JSON dans la réponse")
+    return json.loads(texte[debut:fin + 1])
 
 def simulation_performance_max(df, hippo, discipline, capital, profil):
     partants_str = "\n".join([f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows()])
@@ -80,12 +117,27 @@ def simulation_performance_max(df, hippo, discipline, capital, profil):
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
     
+    # Retourne (texte, erreur) : une des deux valeurs est None.
+    # Les messages d'erreur ne reprennent jamais l'URL (elle contient la clé API).
     try:
         response = requests.post(url, json=payload, timeout=25)
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
-        return None
-    except: return None
+    except requests.Timeout:
+        return None, "Gemini n'a pas répondu à temps (25 s). Réessayez."
+    except requests.RequestException:
+        return None, "Impossible de joindre Gemini (problème réseau)."
+
+    if response.status_code != 200:
+        messages = {
+            400: "Requête refusée par Gemini (clé API invalide ?).",
+            403: "Accès refusé : vérifiez la clé API et ses droits.",
+            429: "Quota Gemini dépassé. Patientez un peu avant de réessayer.",
+        }
+        return None, messages.get(response.status_code,
+                                  f"Gemini a renvoyé une erreur (code {response.status_code}).")
+    try:
+        return response.json()['candidates'][0]['content']['parts'][0]['text'], None
+    except (ValueError, KeyError, IndexError):
+        return None, "Réponse de Gemini vide ou bloquée. Réessayez."
 
 # --- 3. INTERFACE ---
 st.title("🚀 TurfMaster 2.5 : Ultimate Investor")
@@ -101,13 +153,23 @@ with st.sidebar:
 txt_in = st.text_area("📋 Collez ici (ex: 12 FAKIR D4 1a)", height=150)
 
 if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
-    df = extraire_data_pro(txt_in)
+    df, lignes_ignorees = extraire_data_pro(txt_in)
+    if lignes_ignorees:
+        st.warning("⚠️ Lignes non reconnues (ignorées) :\n\n" + "\n\n".join(f"- `{l}`" for l in lignes_ignorees))
     if not df.empty:
         with st.spinner("🧪 Analyse des cotes et détection d'outsider..."):
-            raw = simulation_performance_max(df, hippo_input, discipline, capital, profil)
+            raw, erreur = simulation_performance_max(df, hippo_input, discipline, capital, profil)
+            if erreur:
+                st.error(f"❌ {erreur}")
             if raw:
                 try:
-                    res = json.loads(re.sub(r'```json\n|```', '', raw))
+                    res = extraire_json(raw)
+                    # On vérifie la réponse AVANT d'afficher quoi que ce soit
+                    podium = res['podium'][:5]
+                    for cle in ('r', 'd', 'm', 'ordre', 'pari_nom', 'pari_nums', 'mise', 'gain'):
+                        res[cle]
+                    for p in podium:
+                        p['n'], p['p']
                     st.divider()
                     
                     # 1. BANDEAU INFO
@@ -121,8 +183,8 @@ if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
                     st.divider()
                     cols = st.columns(5)
                     meds = ["🥇 1er", "🥈 2ème", "🥉 3ème", "🔥 OUT", "🏇 5ème"]
-                    for i, p in enumerate(res['podium']):
-                        cols[i].metric(meds[i], p['n'], p['p'])
+                    for col, med, p in zip(cols, meds, podium):
+                        col.metric(med, p['n'], p['p'])
 
                     # 3. TICKET FINAL (Numéros inclus)
                     st.divider()
@@ -132,7 +194,8 @@ if st.button("⚡ GÉNÉRER LE TICKET GAGNANT"):
                     with l2:
                         st.metric("Gain Net Est.", res['gain'])
 
-                except: st.error("Erreur d'analyse. Réessayez l'envoi.")
+                except (ValueError, KeyError, TypeError):
+                    st.error("Erreur d'analyse de la réponse Gemini. Réessayez l'envoi.")
     else: st.error("Veuillez saisir des partants (ex: 12 NOM).")
 
 st.divider()
