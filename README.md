@@ -67,6 +67,26 @@ leur gain ne peut pas être mesuré sans leurs rapports.
 
 Les numéros renvoyés par Gemini sont vérifiés : un numéro absent du départ est écarté et signalé.
 
+### Pronostics de la presse
+
+L'option **📰 Pronostics de la presse** cherche les pronostics publiés pour la course
+(presse hippique, sites de pronostics) et les compile :
+
+- **seules les sources réellement consultées par la recherche Google sont gardées** ; une source
+  citée par l'IA mais introuvable dans les pages consultées est écartée (risque d'invention) ;
+- les numéros absents du départ sont ignorés et signalés ;
+- **consensus** : 1er choix d'une source = 5 points, 2e = 4 … 5e = 1 ;
+- le consensus est transmis à l'IA comme un avis parmi d'autres, et affiché dans le verdict
+  (« cité par 3 sources sur 5 ») et le classement. **Il ne déclenche jamais un pari à lui
+  seul** : la règle de valeur mesurable reste la même.
+
+Cette recherche tourne en même temps que celle de la météo et est gardée 3 h par course.
+
+> **Quota Gemini gratuit** : la clé gratuite est limitée à **20 requêtes par jour** pour
+> `gemini-2.5-flash`. Une analyse complète en utilise jusqu'à 3 (météo, pronostics, analyse),
+> soit environ 6 courses par jour. Désactivez les recherches dans la barre latérale pour en
+> analyser davantage (1 requête par course), ou passez à une clé payante.
+
 ### Recherche Google
 
 L'option **🔎 Recherche Google** cherche la météo, le terrain et les distances du jour. Elle est
