@@ -36,6 +36,9 @@ def lancer(reponses=None, exc=None, texte=PARTANTS, secrets=True, sheets=None, p
     at = AppTest.from_file(APP, default_timeout=30)
     if secrets:
         at.secrets["gemini"] = {"api_key": "CLE-TEST"}
+    else:
+        # Secrets sans section [gemini] : remplace aussi un éventuel ~/.streamlit/secrets.toml
+        at.secrets["autre"] = {"x": 1}
     if sheets is not None:
         at.secrets["connections"] = {"gsheets": {"type": "service_account"}}
     post = mock.patch("requests.post", side_effect=exc or reponses)

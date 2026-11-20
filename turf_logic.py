@@ -161,19 +161,18 @@ MISSION :
 4. Propose {TYPES_PARI[profil]}, avec UNIQUEMENT les numéros des chevaux.
 5. "gain" = gain net estimé pour une mise de 1 €, si tu peux l'estimer à partir des cotes, sinon "?".
 
-RÉPONDS UNIQUEMENT AVEC CE JSON :
+RÉPONDS UNIQUEMENT AVEC UN JSON DE CETTE FORME. Les valeurs entre <> sont à remplacer
+par TES estimations pour CETTE course : ne recopie aucun exemple.
 {{
-    "m": "☀️", "d": "2700m", "r": "Faible | Modéré | Élevé", "ordre": "Num - Num - Num",
+    "m": "<emoji météo, ou ❔>", "d": "<distance réelle, ou ❔>", "r": "<Faible, Modéré ou Élevé>",
+    "ordre": "<NUM> - <NUM> - <NUM>",
     "podium": [
-        {{"n": "NUM - NOM", "p": "38%", "out": false}},
-        {{"n": "NUM - NOM", "p": "22%", "out": false}},
-        {{"n": "NUM - NOM", "p": "15%", "out": false}},
-        {{"n": "NUM - NOM", "p": "11%", "out": true}},
-        {{"n": "NUM - NOM", "p": "8%", "out": false}}
+        {{"n": "<NUM> - <NOM>", "p": "<probabilité>%", "out": <true ou false>}},
+        ... 5 chevaux au total, du plus probable au moins probable
     ],
-    "pari_nom": "Trio",
-    "pari_nums": "12 - 4 - 7",
-    "gain": "+2.50€"
+    "pari_nom": "<type de pari>",
+    "pari_nums": "<NUM> - <NUM> - ...",
+    "gain": "<gain net estimé pour 1 €, ou ?>"
 }}
 """
 
