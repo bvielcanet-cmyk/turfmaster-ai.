@@ -157,7 +157,8 @@ CONFIANCE_IA = 0.5
 PROFILS = {
     "Prudent":   {"ev_min": 0.10, "p_min": 0.30, "cote_max": 4,  "kelly": 0.25, "plafond": 0.01},
     "Équilibré": {"ev_min": 0.08, "p_min": 0.15, "cote_max": 10, "kelly": 0.25, "plafond": 0.02},
-    "Offensif":  {"ev_min": 0.05, "p_min": 0.08, "cote_max": 25, "kelly": 0.50, "plafond": 0.04},
+    # Cote max 20 : sur 560 courses PMU (7-20/11/2026), miser au-delà de 20 a perdu 29 à 58 % de la mise
+    "Offensif":  {"ev_min": 0.05, "p_min": 0.08, "cote_max": 20, "kelly": 0.50, "plafond": 0.04},
 }
 
 

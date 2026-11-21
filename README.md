@@ -61,7 +61,7 @@ Un pari n'est conseillé que si son intérêt peut être **mesuré** :
 |---|---|---|---|---|
 | Prudent | ≥ +10 % | ≥ 30 % | ≤ 4 | 1 % du capital |
 | Équilibré | ≥ +8 % | ≥ 15 % | ≤ 10 | 2 % du capital |
-| Offensif | ≥ +5 % | ≥ 8 % | ≤ 25 | 4 % du capital |
+| Offensif | ≥ +5 % | ≥ 8 % | ≤ 20 | 4 % du capital |
 
 5. **Mise** = fraction du critère de Kelly (¼ en Prudent et Équilibré, ½ en Offensif),
    plafonnée comme ci-dessus : plus l'écart avec les cotes est grand, plus la mise l'est.
@@ -119,9 +119,15 @@ l'IA et celles des cotes pour chaque partant. Dans l'onglet **📊 Historique** 
    les gagnants. Si les cotes font mieux, elle peut descendre jusqu'à 0 % : l'application ne
    conseillera alors plus de paris basés sur l'avis de l'IA.
 
-**Astuce** : analyser des courses **déjà terminées** du programme PMU permet de faire avancer la
-mesure rapidement (1 requête par course). Pour ces courses, aucune recherche internet n'est faite,
-afin de ne pas trouver le résultat.
+**Pour faire avancer la mesure vite** : le bouton **🧪 Tester l'IA sur 5 courses passées** analyse
+5 courses françaises des 7 derniers jours (5 requêtes Gemini), sans recherche internet pour que l'IA
+ne puisse pas trouver le résultat, et les enregistre avec leur arrivée officielle. Une course déjà
+testée n'est jamais refaite. On peut aussi analyser à la main une course terminée du programme PMU.
+
+**Ce qu'a montré un test sur 560 courses PMU** (7 au 20 novembre 2026) : les cotes au départ sont
+très bien calibrées (quand elles donnent 25 %, le cheval gagne environ 25 % du temps) ; les corriger
+n'apporte presque rien. En revanche, miser sur les chevaux cotés **au-delà de 20** a perdu 29 à 58 %
+de la mise, contre 8 à 16 % en dessous : la cote maximale du profil Offensif est donc de 20.
 
 Sans Google Sheets, analyses et tickets sont gardés dans des fichiers locaux (`donnees_locales/`) :
 sur Streamlit Cloud, ils sont **perdus à chaque redémarrage**. Configurez Google Sheets (ci-dessous)

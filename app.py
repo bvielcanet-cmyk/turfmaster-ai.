@@ -1,4 +1,5 @@
 import os
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -220,6 +221,65 @@ def programme_pmu(jour):
 @st.cache_data(ttl=60, show_spinner=False)
 def partants_pmu(jour, reunion, course):
     return pmu.partants(jour, reunion, course)
+
+
+def tester_courses_passees(stockage, profil, capital, confiance, nombre=5, jours=7):
+    """Analyse `nombre` courses françaises déjà courues (jours précédents), sans recherche internet,
+    et les enregistre avec leur gagnant officiel : la mesure de précision avance d'autant.
+    Retourne un message de compte rendu."""
+    analyses, existe = stockage.lire(FEUILLE_ANALYSES, mesure.COLONNES_ANALYSES)
+    deja = {(mesure.texte_cellule(a["date_course"]).zfill(8), a["course"]) for _, a in analyses.iterrows()}
+    candidates = []
+    for k in range(1, jours + 1):
+        jour = date.today() - pd.Timedelta(days=k)
+        try:
+            for c in programme_pmu(jour):
+                if (c["pays"] == "FRA" and c["statut"] == "terminée" and c["arrivee"]
+                        and (pmu.date_pmu(jour), c["id"]) not in deja):
+                    candidates.append((jour, c))
+        except pmu.PmuErreur:
+            continue
+    random.shuffle(candidates)  # courses variées (jours, hippodromes, disciplines)
+
+    testees, chances_ia, chances_cotes, arret = 0, [], [], None
+    for jour, c in candidates:
+        if testees >= nombre:
+            break
+        try:
+            df = partants_pmu(jour, c["reunion"], c["course"])
+            if df.empty or df["COTE"].isna().any():
+                continue
+            partants_str = "\n".join(f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows())
+            raw = analyser_course(partants_str, c["hippodrome"], c["discipline"], profil, None, None, API_KEY)
+            res, _ = tl.valider_reponse(tl.extraire_json(raw), df)
+        except tl.GeminiErreur as e:
+            arret = str(e)
+            break
+        except (pmu.PmuErreur, ValueError, KeyError, TypeError):
+            continue
+        decision = tl.evaluer_pari(res["chevaux"], df, capital, profil, None, confiance)
+        ligne = mesure.ligne_analyse("T" + datetime.now().strftime("%Y%m%d%H%M%S%f"),
+                                     datetime.now().strftime("%Y-%m-%d %H:%M"), pmu.date_pmu(jour), c["id"],
+                                     c["hippodrome"], c["discipline"], profil, decision)
+        ligne["gagnant"], ligne["source_resultat"] = c["arrivee"][0], "PMU officiel (test sur course passée)"
+        analyses = mesure.ajouter_analyse(analyses, ligne)
+        partants = json.loads(ligne["partants"])
+        gagnant = partants.get(c["arrivee"][0], {})
+        chances_ia.append(gagnant.get("ia") or 0)
+        chances_cotes.append(gagnant.get("cotes") or 0)
+        testees += 1
+
+    if testees:
+        stockage.ecrire(FEUILLE_ANALYSES, analyses, existe)
+        message = (f"{testees} course(s) passée(s) testée(s). Chances données au gagnant, en moyenne : "
+                   f"IA {sum(chances_ia) / testees:.0%}, cotes {sum(chances_cotes) / testees:.0%}.")
+    else:
+        message = "Aucune course passée testée."
+    if arret:
+        message += f" Arrêt : {arret}"
+    elif not candidates:
+        message += " Plus aucune course passée à tester sur les 7 derniers jours."
+    return message
 
 
 def recuperer_arrivees(stockage, avec_gemini, maximum_gemini=5):
@@ -611,6 +671,17 @@ with onglet_histo:
         st.rerun()
     if st.session_state.get("compte_rendu"):
         st.info(st.session_state.pop("compte_rendu"))
+
+    # 1 bis. Faire avancer la mesure avec des courses déjà courues
+    if st.button("🧪 Tester l'IA sur 5 courses passées", width="stretch",
+                 help="Analyse 5 courses françaises des 7 derniers jours, sans recherche internet (l'IA ne "
+                      "peut pas trouver le résultat), puis les compare à l'arrivée officielle. "
+                      "Coûte 5 requêtes Gemini."):
+        with st.spinner("Analyse de courses passées (environ 1 minute)..."):
+            st.session_state["compte_rendu_test"] = tester_courses_passees(stockage, profil, capital, confiance)
+        st.rerun()
+    if st.session_state.get("compte_rendu_test"):
+        st.info(st.session_state.pop("compte_rendu_test"))
 
     # 2. Précision de l'IA face aux cotes
     st.markdown("#### 📏 L'IA prévoit-elle mieux que les cotes ?")

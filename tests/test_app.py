@@ -487,3 +487,54 @@ def test_google_sheets_cycle_complet():
     ticket = feuille.onglets["TurfMaster"].iloc[0]
     assert ticket["resultat"] == "Gagné" and ticket["source_gain"] == "rapport officiel PMU"
     assert any("1 course(s) mesurée(s)" in i for i in textes(at.info))
+
+
+
+# --- Test sur des courses passées -------------------------------------------------
+
+def get_par_jour(url, **kw):
+    """Faux PMU dont les cotes changent selon le jour : chaque jour est une course différente."""
+    r = faux_get(url, **kw)
+    if url.endswith("/participants"):
+        import copy, re as _re
+        data = copy.deepcopy(r.json.return_value)
+        jour = int(_re.search(r"/(\d{8})/", url).group(1)[:2])
+        data["participants"][0]["dernierRapportDirect"]["rapport"] = 3.0 + jour / 10
+        r = mock.Mock(status_code=200)
+        r.json.return_value = data
+    return r
+
+
+def test_tester_courses_passees(tmp_path):
+    # Le faux PMU renvoie le même programme chaque jour : 1 course terminée (R1C1, gagnant n° 5) par jour
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=get_par_jour), \
+            mock.patch("requests.post", side_effect=gemini_simule([http(json_=IA_PMU)] * 5)) as p:
+        bouton(at, "Tester l'IA sur 5 courses passées").click().run()
+    assert p.call_count == 5
+    assert all("tools" not in c.kwargs["json"] for c in p.call_args_list)  # jamais de recherche internet
+    analyses = pd.read_csv(tmp_path / "Analyses.csv", dtype=str, keep_default_na=False)
+    assert len(analyses) == 5 and set(analyses["gagnant"]) == {"5"} and analyses["course"].eq("R1C1").all()
+    assert analyses["date_course"].nunique() == 5  # 5 jours différents
+    assert any("5 course(s) passée(s) testée(s)" in i and "IA 40" in i for i in textes(at.info)), textes(at.info)
+    assert any("5 course(s) mesurée(s)" in i for i in textes(at.info))
+
+
+def test_tester_courses_passees_arret_au_quota(tmp_path):
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=get_par_jour), \
+            mock.patch("requests.post", side_effect=gemini_simule([http(json_=IA_PMU), http(json_=IA_PMU), http(429)])):
+        bouton(at, "Tester l'IA sur 5 courses passées").click().run()
+    analyses = pd.read_csv(tmp_path / "Analyses.csv", dtype=str, keep_default_na=False)
+    assert len(analyses) == 2  # les 2 premières sont gardées
+    assert any("2 course(s) passée(s) testée(s)" in i and "Quota Gemini dépassé" in i for i in textes(at.info))
+
+
+def test_tester_courses_passees_sans_doublon(tmp_path):
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=get_par_jour), \
+            mock.patch("requests.post", side_effect=gemini_simule([http(json_=IA_PMU)] * 7)) as p:
+        bouton(at, "Tester l'IA sur 5 courses passées").click().run()
+        bouton(at, "Tester l'IA sur 5 courses passées").click().run()
+    assert p.call_count == 7  # 7 jours x 1 course : les 5 déjà testées ne sont pas refaites
+    assert any("2 course(s) passée(s) testée(s)" in i and "Plus aucune" not in i for i in textes(at.info))
