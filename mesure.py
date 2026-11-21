@@ -20,6 +20,36 @@ import pandas as pd
 COLONNES_ANALYSES = ["id", "date", "date_course", "course", "hippodrome", "discipline", "profil",
                      "partants", "decision", "pari_num", "mise", "gagnant", "source_resultat"]
 MINIMUM_COURSES = 30
+COLONNES_NUMERIQUES = {"mise", "gain_reel", "cote", "proba_ia", "gain_espere"}
+
+
+def texte_cellule(valeur):
+    """Valeur d'une cellule relue (Google Sheets ou CSV) -> texte propre.
+
+    Google Sheets ne garde pas les types : à la relecture, une cellule vide devient NaN
+    et « 5 » peut revenir en 5.0. On ramène tout à « » ou « 5 »."""
+    if valeur is None:
+        return ""
+    try:
+        if pd.isna(valeur):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(valeur, float) and valeur.is_integer():
+        return str(int(valeur))
+    texte = str(valeur).strip()
+    return "" if texte.lower() == "nan" else texte
+
+
+def normaliser(df):
+    """Colonnes de texte en texte propre, montants en nombres (0 si vide)."""
+    df = df.copy()
+    for col in df.columns:
+        if col in COLONNES_NUMERIQUES:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
+        else:
+            df[col] = df[col].map(texte_cellule).astype(object)
+    return df
 POIDS_TESTES = [i / 10 for i in range(11)]
 
 
@@ -59,8 +89,8 @@ def _courses_mesurables(df):
     if df is None or df.empty:
         return courses
     for _, row in df.iterrows():
-        gagnant = str(row.get("gagnant") or "").strip()
-        if not gagnant or gagnant.lower() == "nan":
+        gagnant = texte_cellule(row.get("gagnant"))
+        if not gagnant:
             continue
         try:
             partants = json.loads(row["partants"])
@@ -117,8 +147,7 @@ def en_attente(df):
     """Analyses dont le gagnant n'est pas encore connu."""
     if df is None or df.empty:
         return df
-    g = df["gagnant"].astype(str).str.strip()
-    return df[(g == "") | (g.str.lower() == "nan")]
+    return df[df["gagnant"].map(texte_cellule) == ""]
 
 
 def mettre_a_jour_tickets(tickets, analyses):
@@ -129,19 +158,19 @@ def mettre_a_jour_tickets(tickets, analyses):
     if tickets is None or tickets.empty or analyses is None or analyses.empty:
         return tickets, 0
     tickets = tickets.copy()
-    par_id = {str(a["id"]): a for _, a in analyses.iterrows()}
+    par_id = {texte_cellule(a["id"]): a for _, a in analyses.iterrows()}
     modifies = 0
     for i, t in tickets.iterrows():
-        a = par_id.get(str(t.get("analyse")))
+        a = par_id.get(texte_cellule(t.get("analyse")))
         if t.get("resultat") != "En attente" or a is None:
             continue
-        gagnant = str(a.get("gagnant") or "").strip()
-        if not gagnant or gagnant.lower() == "nan":
+        gagnant = texte_cellule(a.get("gagnant"))
+        if not gagnant:
             continue
         if gagnant == "annulée":
             tickets.at[i, "resultat"], tickets.at[i, "gain_reel"] = "Gagné", float(t["mise"])
             tickets.at[i, "source_gain"] = "course annulée : mise remboursée"
-        elif str(t["chevaux"]) == gagnant:
+        elif texte_cellule(t["chevaux"]) == gagnant:
             rapport = _rapport(a)
             tickets.at[i, "resultat"] = "Gagné"
             if rapport:

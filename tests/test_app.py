@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+from pandas.io.parsers import TextParser
 import pytest
 import requests
 import streamlit as st
@@ -84,9 +85,14 @@ class FauxSheets:
         self.onglets = {k: v.copy() for k, v in onglets.items()}
 
     def read(self, worksheet=None, ttl=None):
+        """Relit l'onglet comme le vrai Google Sheets : cellules en texte, puis types devinés par
+        pandas (cellule vide -> NaN, « 5 » -> 5, « 21112026 » -> nombre…)."""
         if worksheet not in self.onglets:
-            raise Exception("onglet absent")
-        return self.onglets[worksheet].copy()
+            exc = type("WorksheetNotFound", (Exception,), {})
+            raise exc(worksheet)
+        df = self.onglets[worksheet]
+        lignes = [list(df.columns)] + [["" if pd.isna(v) else str(v) for v in r] for r in df.itertuples(index=False)]
+        return TextParser(lignes, header=0).read()
 
     def update(self, worksheet=None, data=None):
         self.onglets[worksheet] = data.copy()
@@ -467,3 +473,17 @@ def test_erreur_google_sheets_expliquee(erreur, cause):
     at, _ = lancer([http()], sheets=SheetsEnPanne(erreur), recherche=False)
     assert any("Analyse non enregistrée" in c and cause in c for c in textes(at.caption)), textes(at.caption)
     assert any(cause in e for e in textes(at.error))  # rappel en tête de l'onglet Historique
+
+
+
+def test_google_sheets_cycle_complet():
+    """Analyse, ticket, arrivée : tout passe par un Google Sheet simulé qui déforme les types."""
+    feuille = FauxSheets()
+    at, _ = lancer([http(json_=IA_PMU)], course=0, sheets=feuille)
+    with mock.patch("streamlit.connection", return_value=feuille), mock.patch("requests.get", side_effect=faux_get):
+        bouton(at, "enregistrer le ticket").click().run()
+        bouton(at, "Récupérer les arrivées").click().run()
+    assert any("1 arrivée(s) récupérée(s) · 1 ticket(s) mis à jour" in i for i in textes(at.info)), textes(at.info)
+    ticket = feuille.onglets["TurfMaster"].iloc[0]
+    assert ticket["resultat"] == "Gagné" and ticket["source_gain"] == "rapport officiel PMU"
+    assert any("1 course(s) mesurée(s)" in i for i in textes(at.info))
