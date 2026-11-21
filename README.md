@@ -72,6 +72,60 @@ le profil) plutôt qu'un dosage de Kelly.
 `ConseilsPlace`) et réglé au rapport officiel par « Récupérer les arrivées ». L'Historique affiche
 le bilan réel. **Attendez au moins 100 conseils réglés avec un rendement positif avant de miser.**
 
+#### Choisir sa mise : les séries de pertes
+
+Simulation (20 000 tirages) de 300 conseils, à partir des 479 résultats réels passés, en supposant
+que le rendement passé se maintient :
+
+| Mise par conseil | Capital médian (départ 100) | Fini en perte | Baisse en cours de route > 20 % | > 40 % |
+|---|---|---|---|---|
+| 0,5 % (Prudent) | 128 | 4 % | 0 % | 0 % |
+| 1 % (Équilibré) | 162 | 4 % | 17 % | 0 % |
+| 1,5 % (Offensif) | 200 | 5 % | 57 % | 2 % |
+| 3 % | 338 | 7 % | 100 % | 45 % |
+
+Environ un conseil sur deux est perdu, et il faut s'attendre à **7 pertes d'affilée** de temps en
+temps. Au-delà de 1,5 % du capital par conseil, les baisses deviennent brutales.
+
+#### Deux règles suivies en parallèle
+
+- **Règle confirmée** (celle qui est conseillée) : formule de Harville classique.
+- **Règle corrigée** (en essai, relevée seulement par le suivi automatique) : formule de Harville
+  corrigée (coefficients 0,81 et 0,65 appris sur 1 195 courses), mieux calibrée. Sur les courses
+  passées : moins de conseils, plus rarement placés mais mieux payés (+37 % puis +15 %). Elle n'a
+  pas eu de test de confirmation : le suivi réel départagera les deux.
+
+Les chances de placé affichées utilisent la formule corrigée, plus réaliste.
+
+### 🤖 Suivi automatique et alertes Telegram
+
+Le fichier `.github/workflows/suivi.yml` lance `suivi_auto.py` **toutes les 10 minutes de 10 h à
+minuit** (GitHub peut retarder de quelques minutes). À chaque passage :
+
+1. pour chaque course française qui part **dans 3 à 20 minutes**, le conseil Placé (règle confirmée
+   et règle corrigée) est enregistré dans l'onglet `ConseilsPlace` du Google Sheet et envoyé sur
+   **Telegram** ;
+2. les conseils dont la course est terminée sont réglés au rapport officiel, avec un
+   récapitulatif Telegram.
+
+Le suivi à blanc avance ainsi sans intervention (environ 100 conseils en une semaine).
+
+**Configuration** — sur GitHub : *Settings → Secrets and variables → Actions → New repository secret* :
+
+| Secret | Valeur |
+|---|---|
+| `GSHEETS_CREDENTIALS` | tout le contenu du fichier JSON du compte de service Google |
+| `GSHEETS_URL` | l'adresse du classeur (`https://docs.google.com/spreadsheets/d/…/edit`) |
+| `TELEGRAM_BOT_TOKEN` | le jeton du bot donné par @BotFather |
+| `TELEGRAM_CHAT_ID` | l'identifiant de votre conversation avec le bot |
+
+Pour trouver `TELEGRAM_CHAT_ID` : envoyez un message à votre bot, puis ouvrez
+`https://api.telegram.org/bot<JETON>/getUpdates` et relevez le nombre après `"chat":{"id":`.
+
+Facultatif, onglet *Variables* : `CAPITAL` (1000 par défaut) et `PROFIL` (`Équilibré` par défaut)
+pour la mise indiquée dans les alertes. Sans `GSHEETS_CREDENTIALS`, le script tourne « à sec » et
+n'enregistre rien. Les secrets ne sont jamais affichés dans les journaux de GitHub.
+
 ### Quand l'application conseille-t-elle de jouer ?
 
 Un pari n'est conseillé que si son intérêt peut être **mesuré** :
@@ -227,4 +281,5 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 - `pmu.py` : programme, partants, cotes, arrivées et rapports du PMU
 - `mesure.py` : enregistrement des analyses, précision de l'IA face aux cotes
 - `place.py` : conseil Simple Placé (formule de Harville), suivi à blanc
+- `suivi_auto.py` : relevé automatique des conseils Placé et alertes Telegram (GitHub Actions)
 - `tests/` : tests automatiques

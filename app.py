@@ -271,7 +271,8 @@ def conseil_place_html(c, profil):
 <div><span>Cote Placé probable</span><b>{c['cote_min']:g} – {c['cote_max']:g}</b><small>jouer seulement si le minimum reste ≥ {c['cote_mini_a_jouer']:.2f}</small></div>
 <div><span>Gain espéré</span><b>{c['gain_espere'] * 100:+.0f}\u00a0%</b><small>calcul souvent optimiste</small></div>
 </div>
-<div class="tm-pourquoi">🧪 <b>Phase de test (suivi à blanc)</b> : ce conseil est noté et sera réglé automatiquement
+<div class="tm-pourquoi">Chances de placé estimées ≈ <b>{c['proba_corrigee']:.0%}</b> (formule corrigée, plus réaliste).<br>
+🧪 <b>Phase de test (suivi à blanc)</b> : ce conseil est noté et sera réglé automatiquement
 au rapport officiel. Ne misez pas avant d'avoir vu le bilan dans l'onglet Historique.</div>
 </div>"""
 
@@ -788,17 +789,19 @@ with onglet_histo:
     # 1 ter. Suivi à blanc des conseils Placé
     st.markdown("#### 🎯 Conseils Placé — suivi à blanc")
     suivi, _ = stockage.lire(FEUILLE_SUIVI, place.COLONNES_SUIVI)
-    bilan = place.stats_suivi(suivi)
+    bilan = place.stats_suivi(suivi, "confirmée")
+    essai = place.stats_suivi(suivi, "corrigée")
+    objectif = 100
     if bilan["n"] == 0:
-        st.caption(f"Aucun conseil réglé pour l'instant ({bilan['en_attente']} en attente). Demandez des "
-                   "conseils Placé sur des courses à venir, puis « Récupérer les arrivées » après les courses.")
+        st.caption(f"Aucun conseil réglé pour l'instant ({bilan['en_attente']} en attente). Les conseils sont "
+                   "relevés automatiquement avant chaque départ (voir le README), ou à la demande avec le bouton "
+                   "« Conseil Placé » ; ils sont réglés par « Récupérer les arrivées ».")
     else:
         m = st.columns(4)
         m[0].metric("Conseils réglés", f"{bilan['n']} (+{bilan['en_attente']} en attente)")
         m[1].metric("Placés", f"{bilan['places']:.0%}")
         m[2].metric("Rendement (1 € par conseil)", f"{bilan['rendement'] * 100:+.1f} %")
         m[3].metric("Gain fictif", f"{bilan['gain']:+.2f} €")
-        objectif = 100
         if bilan["n"] < objectif:
             st.caption(f"Objectif : {objectif} conseils réglés avant de miser pour de vrai "
                        f"({bilan['n']}/{objectif}). Sur 479 courses passées, la règle a donné environ +18 %.")
@@ -808,6 +811,9 @@ with onglet_histo:
         else:
             st.warning(f"Sur {bilan['n']} conseils réels, le rendement est négatif : la règle ne marche pas "
                        "(ou plus). Ne misez pas.")
+    if essai["n"]:
+        st.caption(f"🧪 Règle corrigée (en essai) : {essai['n']} conseils réglés, placés {essai['places']:.0%}, "
+                   f"rendement {essai['rendement'] * 100:+.1f} % pour 1 € par conseil.")
     with st.expander(f"Détail des conseils ({len(suivi)})"):
         if suivi.empty:
             st.caption("Aucun conseil enregistré.")

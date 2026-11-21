@@ -1,0 +1,32 @@
+name: Suivi automatique des conseils Placé
+
+on:
+  schedule:
+    # Toutes les 10 minutes, de 10 h à 23 h 50 (heure de Paris en hiver ; GitHub compte en UTC).
+    # GitHub peut retarder ces lancements de quelques minutes.
+    - cron: "*/10 9-22 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: suivi-place
+  cancel-in-progress: false
+
+jobs:
+  suivi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python suivi_auto.py
+        env:
+          GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
+          GSHEETS_URL: ${{ secrets.GSHEETS_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CAPITAL: ${{ vars.CAPITAL || '1000' }}
+          PROFIL: ${{ vars.PROFIL || 'Équilibré' }}
