@@ -218,3 +218,19 @@ def test_source_ecrite_autrement_que_le_domaine():
     c = tl.compiler_pronostics(rep, consultees, site())
     assert [s["domaine"] for s in c["sources"]] == ["frequence-turf.fr", "jeu-legal-france.fr", "canalturf.com", "zeturf.fr"]
     assert c["ecartees"] == 2
+
+
+
+def test_lire_pronostics():
+    texte = """Voici les pronostics trouvés :
+
+RueDesJoueurs (experte) | ruedesjoueurs.com | 10-8-12-7-13
+**Canalturf** | canalturf.com | 10 - 12 - 9
+Ligne sans format
+ZETURF | zeturf.com | aucun numéro
+"""
+    assert tl.lire_pronostics(texte) == {"sources": [
+        {"nom": "RueDesJoueurs (experte)", "site": "ruedesjoueurs.com", "selection": ["10", "8", "12", "7", "13"]},
+        {"nom": "Canalturf", "site": "canalturf.com", "selection": ["10", "12", "9"]}]}
+    assert tl.lire_pronostics("AUCUN") == {"sources": []}
+    assert tl.lire_pronostics('{"sources": [{"nom": "A", "site": "a.fr", "selection": ["1"]}]}')["sources"][0]["nom"] == "A"

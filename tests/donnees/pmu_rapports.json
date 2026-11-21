@@ -1,0 +1,24 @@
+[
+ {
+  "typePari": "SIMPLE_GAGNANT",
+  "rapports": [
+   {
+    "combinaison": "5",
+    "dividendePourUnEuro": 1040
+   }
+  ]
+ },
+ {
+  "typePari": "SIMPLE_PLACE",
+  "rapports": [
+   {
+    "combinaison": "5",
+    "dividendePourUnEuro": 430
+   },
+   {
+    "combinaison": "1",
+    "dividendePourUnEuro": 200
+   }
+  ]
+ }
+]

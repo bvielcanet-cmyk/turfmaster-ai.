@@ -1,0 +1,109 @@
+{
+ "participants": [
+  {
+   "numPmu": 1,
+   "nom": "ISISDELAGARDE AA",
+   "statut": "PARTANT",
+   "driver": "L.ZULIANI",
+   "entraineur": "F.LAGARDE",
+   "musique": "2s5s1s(25)3s2s2s2s3s3s",
+   "sexe": "HONGRES",
+   "age": 8,
+   "handicapPoids": 690,
+   "dernierRapportDirect": {
+    "rapport": 3.7
+   },
+   "ordreArrivee": 2
+  },
+  {
+   "numPmu": 2,
+   "nom": "FENOMENE D'OC AA",
+   "statut": "NON_PARTANT",
+   "driver": "L.SALMON",
+   "entraineur": "CHAILLE-CHAILLE & PAMART",
+   "musique": "5s(25)2s(24)1s1s4s1s(23)Ts",
+   "sexe": "HONGRES",
+   "age": 11,
+   "handicapPoids": 680,
+   "poidsConditionMonte": 640,
+   "dernierRapportDirect": {
+    "rapport": 4.9
+   },
+   "ordreArrivee": 4
+  },
+  {
+   "numPmu": 3,
+   "nom": "CHUCK BERRY AA",
+   "statut": "PARTANT",
+   "driver": "J.CHARRON",
+   "entraineur": "LAGENESTE & MACAIRE (S)",
+   "musique": "4s(25)2c(24)2c1c4s3s(23)6s",
+   "sexe": "HONGRES",
+   "age": 8,
+   "handicapPoids": 680,
+   "dernierRapportDirect": {
+    "rapport": 8.9
+   },
+   "ordreArrivee": 5
+  },
+  {
+   "numPmu": 4,
+   "nom": "FOREST DU PECOS AA",
+   "statut": "PARTANT",
+   "driver": "K.DUBOURG",
+   "entraineur": "K.TAVARES (S)",
+   "musique": "1s0pAs2s1s(25)4s3s1s1s",
+   "sexe": "HONGRES",
+   "age": 5,
+   "handicapPoids": 670,
+   "dernierRapportDirect": {
+    "rapport": 3.9
+   },
+   "ordreArrivee": 6
+  },
+  {
+   "numPmu": 5,
+   "nom": "LOKI DE LA BRUNIE AA",
+   "statut": "PARTANT",
+   "driver": "T.BEAURAIN",
+   "entraineur": "B.GOURDON (S)",
+   "musique": "3s2s6c2s2s(25)2s2s2s2s",
+   "sexe": "HONGRES",
+   "age": 5,
+   "handicapPoids": 660,
+   "dernierRapportDirect": {
+    "rapport": 10.0
+   },
+   "ordreArrivee": 1
+  },
+  {
+   "numPmu": 6,
+   "nom": "STINGO AA",
+   "statut": "PARTANT",
+   "driver": "A.ZULIANI",
+   "entraineur": "D.MELE (S)",
+   "musique": "(25)0s6s0h(24)1s(23)1s1h1h",
+   "sexe": "HONGRES",
+   "age": 9,
+   "handicapPoids": 650,
+   "dernierRapportDirect": {
+    "rapport": 5.2
+   },
+   "ordreArrivee": 3
+  },
+  {
+   "numPmu": 7,
+   "nom": "SHERKARA AA",
+   "statut": "PARTANT",
+   "driver": "T.CHEVILLARD",
+   "entraineur": "A.ESTRABOL",
+   "musique": "2s3s(25)7s1h1s7h2hJs",
+   "sexe": "FEMELLES",
+   "age": 5,
+   "handicapPoids": 640,
+   "dernierRapportDirect": {
+    "rapport": 23.0
+   }
+  }
+ ]
+}

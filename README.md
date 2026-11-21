@@ -8,6 +8,15 @@ Application Streamlit qui analyse une liste de partants avec Gemini et ne consei
 
 ## Utilisation
 
+**Le plus simple : 📅 Programme PMU.** Choisissez le jour et la course : partants, cotes PMU du
+moment, hippodrome et discipline sont chargés automatiquement. Le copier-coller reste disponible
+(📋), par exemple si le site du PMU ne répond pas.
+
+> Les données viennent du site du PMU. Ce n'est pas une interface officiellement ouverte au
+> public : elle peut changer sans prévenir. L'application l'interroge avec modération.
+
+Pour le copier-coller :
+
 1. Dans la barre latérale : hippodrome, discipline, capital et profil de risque.
 2. Collez les partants. Deux formats sont acceptés :
 
@@ -94,6 +103,30 @@ faite **une fois par hippodrome et par jour** puis réutilisée : seule la premi
 réunion est plus lente. Si elle n'est pas disponible, l'analyse se fait sans et un message
 l'indique. Une même course n'est envoyée qu'une fois par heure à Gemini.
 
+### Mesurer la précision de l'IA
+
+**Chaque analyse est enregistrée**, qu'un pari soit conseillé ou non, avec les probabilités de
+l'IA et celles des cotes pour chaque partant. Dans l'onglet **📊 Historique** :
+
+1. **🔄 Récupérer les arrivées** : pour les courses du programme PMU, le gagnant et le rapport
+   officiel sont récupérés au PMU (sans requête Gemini). Pour les courses collées, cochez la
+   recherche Gemini (1 requête par course, résultat non officiel). Les tickets joués sont
+   remplis automatiquement (Gagné / Perdu, somme rapportée).
+2. **📏 L'IA prévoit-elle mieux que les cotes ?** L'application compare l'IA et les cotes sur
+   les courses terminées (perte logarithmique, score de Brier, part des favoris gagnants).
+3. **Réglage automatique** : à partir de **30 courses mesurées**, la part de l'IA dans la
+   probabilité retenue n'est plus fixée à 50 % mais réglée sur la valeur qui a le mieux prévu
+   les gagnants. Si les cotes font mieux, elle peut descendre jusqu'à 0 % : l'application ne
+   conseillera alors plus de paris basés sur l'avis de l'IA.
+
+**Astuce** : analyser des courses **déjà terminées** du programme PMU permet de faire avancer la
+mesure rapidement (1 requête par course). Pour ces courses, aucune recherche internet n'est faite,
+afin de ne pas trouver le résultat.
+
+Sans Google Sheets, analyses et tickets sont gardés dans des fichiers locaux (`donnees_locales/`) :
+sur Streamlit Cloud, ils sont **perdus à chaque redémarrage**. Configurez Google Sheets (ci-dessous)
+pour les garder. Les onglets `TurfMaster` (tickets) et `Analyses` sont créés automatiquement.
+
 ## Configuration (Secrets)
 
 Sur Streamlit Cloud : *Settings → Secrets*. En local : fichier `.streamlit/secrets.toml`
@@ -106,7 +139,7 @@ api_key = "VOTRE_CLE_GEMINI"
 
 ### Historique Google Sheets (facultatif)
 
-Sans cette section, l'application fonctionne mais l'historique est désactivé.
+Sans cette section, l'application fonctionne mais tickets et analyses sont gardés dans des fichiers locaux, perdus à chaque redémarrage sur Streamlit Cloud.
 
 1. Dans Google Cloud, créez un **compte de service**, activez les API *Google Sheets* et
    *Google Drive*, puis téléchargez sa clé JSON.
@@ -158,5 +191,7 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 ## Organisation du code
 
 - `app.py` : interface Streamlit
-- `turf_logic.py` : lecture des partants, mise, appel Gemini, statistiques
+- `turf_logic.py` : lecture des partants, décision de pari, appels Gemini, statistiques
+- `pmu.py` : programme, partants, cotes, arrivées et rapports du PMU
+- `mesure.py` : enregistrement des analyses, précision de l'IA face aux cotes
 - `tests/` : tests automatiques

@@ -9,6 +9,8 @@ import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+from test_pmu import faux_get
+
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 SITE = (Path(__file__).parent / "donnees" / "partants_site.txt").read_text()
 
@@ -33,8 +35,10 @@ CONTEXTE = http(texte="Météo : soleil. Terrain : souple. Prix X : 3500 m.")
 
 
 def http_presse(sources, consultees=("paris-turf.com", "equidia.fr", "geny.com")):
-    """Réponse de la recherche de pronostics, avec les pages réellement consultées."""
-    r = http(json_={"sources": sources})
+    """Réponse de la recherche de pronostics (une ligne par source), avec les pages réellement consultées."""
+    texte = "Voici les pronostics :\n" + "\n".join(
+        f"{s['nom']} | {s['site']} | {'-'.join(s['selection'])}" for s in sources)
+    r = http(texte=texte)
     r.json.return_value["candidates"][0]["groundingMetadata"] = {
         "groundingChunks": [{"web": {"uri": f"https://redirect.example/{d}", "title": d}} for d in consultees]}
     return r
@@ -54,7 +58,8 @@ def gemini_simule(analyses, contexte=CONTEXTE, presse=PRESSE):
 
     def post(url, json=None, **kw):
         if "tools" in json:
-            reponse = presse if "PRONOSTICS" in json["contents"][0]["parts"][0]["text"] else contexte
+            question = json["contents"][0]["parts"][0]["text"]
+            reponse = presse if "pronostics ont été publiés" in question else contexte
         else:
             if not file:
                 raise AssertionError("analyse Gemini inattendue")
@@ -66,13 +71,32 @@ def gemini_simule(analyses, contexte=CONTEXTE, presse=PRESSE):
 
 
 @pytest.fixture(autouse=True)
-def vider_cache():
+def vider_cache(tmp_path, monkeypatch):
     st.cache_data.clear()
     st.cache_resource.clear()
+    monkeypatch.setenv("TURFMASTER_DONNEES", str(tmp_path))  # stockage local dans un dossier temporaire
+
+
+class FauxSheets:
+    """Google Sheet simulé : un DataFrame par onglet."""
+
+    def __init__(self, **onglets):
+        self.onglets = {k: v.copy() for k, v in onglets.items()}
+
+    def read(self, worksheet=None, ttl=None):
+        if worksheet not in self.onglets:
+            raise Exception("onglet absent")
+        return self.onglets[worksheet].copy()
+
+    def update(self, worksheet=None, data=None):
+        self.onglets[worksheet] = data.copy()
+
+    create = update
 
 
 def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profil=None,
-           recherche=True, discipline=None, limite=None, contexte=CONTEXTE, presse=None):
+           recherche=True, discipline=None, limite=None, contexte=CONTEXTE, presse=None, course=None):
+    """Lance l'application. course=None : copier-coller ; sinon index de la course du programme PMU."""
     at = AppTest.from_file(APP, default_timeout=30)
     if secrets:
         at.secrets["gemini"] = {"api_key": "CLE-TEST"}
@@ -83,9 +107,15 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
         at.secrets["connections"] = {"gsheets": {"type": "service_account"}}
     effet = exc or gemini_simule(reponses or [], contexte, presse)
     with mock.patch("requests.post", side_effect=effet) as p, \
+            mock.patch("requests.get", side_effect=faux_get), \
             mock.patch("streamlit.connection", return_value=sheets):
         at.run()
-        if at.text_area:
+        if at.radio:
+            if course is None:
+                at.radio[0].set_value("📋 Copier-coller").run()
+            else:
+                [sb for sb in at.selectbox if sb.label == "Course"][0].select_index(course).run()
+        if at.button and not at.exception and (at.text_area or course is not None):
             if profil:
                 at.select_slider[0].set_value(profil)
             if not recherche:
@@ -93,10 +123,11 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
             if presse is None:
                 at.toggle[1].set_value(False)  # pronostics de la presse désactivés par défaut dans les tests
             if discipline:
-                at.selectbox[0].set_value(discipline)
+                [sb for sb in at.selectbox if sb.label == "Discipline"][0].set_value(discipline)
             if limite is not None:
                 at.number_input[1].set_value(limite)
-            at.text_area[0].input(texte)
+            if course is None:
+                at.text_area[0].input(texte)
             analyser(at).click().run()
     return at, p
 
@@ -223,16 +254,9 @@ def test_erreurs(reponses, exc, message):
 
 def test_saisie_vide_et_lignes_ignorees():
     at, p = lancer([], texte="", recherche=False)
-    assert "Veuillez saisir des partants" in textes(at.error)[0] and p.call_count == 0
+    assert "collez des partants" in textes(at.error)[0] and p.call_count == 0
     at, _ = lancer([http()], texte="Prix de Paris\n" + SITE, recherche=False)
     assert "Prix de Paris" in textes(at.warning)[0]
-
-
-def test_historique_desactive_et_limite_non_verifiee():
-    at, _ = lancer([http()], recherche=False)
-    assert any("Historique désactivé" in i for i in textes(at.info))
-    assert any("Limite de pertes non vérifiée" in c for c in textes(at.caption))
-    assert not [b for b in at.button if "Enregistrer" in b.label]
 
 
 def historique(*lignes):
@@ -245,40 +269,117 @@ def maintenant(delta_jours=0):
     return (pd.Timestamp.now() - pd.Timedelta(days=delta_jours)).strftime("%Y-%m-%d %H:%M")
 
 
-def test_enregistrer_ticket():
-    feuille = mock.Mock()
-    feuille.read.side_effect = Exception("onglet absent")
+def bouton(at, texte):
+    return [b for b in at.button if texte in b.label][0]
+
+
+def test_stockage_local_sans_google_sheets(tmp_path):
+    at, _ = lancer([http()], recherche=False)
+    assert (tmp_path / "Analyses.csv").exists()  # analyse enregistrée même sans ticket
+    with mock.patch("requests.get", side_effect=faux_get):
+        bouton(at, "enregistrer le ticket").click().run()
+    tickets = pd.read_csv(tmp_path / "TurfMaster.csv", dtype=str)
+    assert tickets.iloc[0]["chevaux"] == "4" and tickets.iloc[0]["analyse"]
+    assert any("perdues à chaque redémarrage" in c for c in textes(at.caption))
+
+
+def test_enregistrer_ticket_google_sheets():
+    feuille = FauxSheets()
     at, _ = lancer([http()], sheets=feuille, recherche=False)
-    with mock.patch("streamlit.connection", return_value=feuille):
-        [b for b in at.button if "Enregistrer le ticket" in b.label][0].click().run()
-    assert feuille.create.call_count == 1
-    ligne = feuille.create.call_args.kwargs["data"].iloc[0]
+    with mock.patch("streamlit.connection", return_value=feuille), mock.patch("requests.get", side_effect=faux_get):
+        bouton(at, "enregistrer le ticket").click().run()
+    ligne = feuille.onglets["TurfMaster"].iloc[0]
     assert ligne["pari"] == "Simple Gagnant" and ligne["chevaux"] == "4" and ligne["cote"] == 5.8
     assert 0 < ligne["mise"] <= 20 and ligne["resultat"] == "En attente"
+    assert len(feuille.onglets["Analyses"]) == 1
     assert any("Ticket enregistré" in s for s in textes(at.success))
 
 
 def test_limite_de_pertes_atteinte():
-    feuille = mock.Mock()
-    feuille.read.return_value = historique((maintenant(1), 60, "Perdu", 0), (maintenant(2), 50, "Perdu", 0))
+    feuille = FauxSheets(TurfMaster=historique((maintenant(1), 60, "Perdu", 0), (maintenant(2), 50, "Perdu", 0)))
     at, _ = lancer([http()], sheets=feuille, recherche=False)  # limite par défaut : 100 €
     assert "NE PAS JOUER" in verdict(at) and "Limite de pertes atteinte" in verdict(at)
 
 
 def test_limite_de_pertes_reduit_la_mise():
-    feuille = mock.Mock()
-    feuille.read.return_value = historique((maintenant(1), 97, "Perdu", 0))
+    feuille = FauxSheets(TurfMaster=historique((maintenant(1), 97, "Perdu", 0)))
     at, _ = lancer([http()], sheets=feuille, recherche=False)
     assert "3,00\u00a0€" in verdict(at)
 
 
 def test_stats_historique():
-    feuille = mock.Mock()
-    feuille.read.return_value = historique((maintenant(30), 20, "Gagné", 50), (maintenant(30), 20, "Perdu", 0))
+    feuille = FauxSheets(TurfMaster=historique((maintenant(30), 20, "Gagné", 50), (maintenant(30), 20, "Perdu", 0)))
     at, _ = lancer([], texte="", sheets=feuille, recherche=False)
     valeurs = {m.label: m.value for m in at.metric}
     assert valeurs["Bénéfice"] == "+10.00 €" and valeurs["ROI"] == "+25.0 %"
     assert valeurs["Perte 7 jours"] == "0.00 € / 100 €"
+
+
+# --- Programme PMU, arrivées et mesure -----------------------------------------
+
+# Réponse de l'IA pour la course du PMU (le n° 2 est non partant) : elle voit le n° 5 bien au-dessus des cotes
+IA_PMU = {"m": "🌧️", "d": "4400m", "r": "Modéré",
+          "chevaux": [{"num": n, "p": p} for n, p in [("5", 40), ("1", 20), ("4", 15), ("6", 12), ("3", 8), ("7", 5)]],
+          "pari_nom": "Trio", "pari_nums": "5 - 1 - 4"}
+
+
+def test_course_pmu_a_venir():
+    at, p = lancer([http(json_=IA_PMU)], course=1, presse=PRESSE)  # R1C2, à venir
+    assert not at.exception and not at.error, textes(at.error)
+    assert p.call_count == 3  # météo + presse + analyse
+    assert "5 - LOKI DE LA BRUNIE (F | 3s 2s 6c" in prompt(p) and "cote 10" in prompt(p)
+    assert "Hippodrome : Auteuil | Discipline : Obstacles" in prompt(p)
+    assert "2 - FENOMENE" not in prompt(p)  # non partant exclu
+    assert "À JOUER" in verdict(at) and "n° 5 LOKI DE LA BRUNIE" in verdict(at)
+
+
+def test_course_pmu_terminee_sans_recherche(tmp_path):
+    at, p = lancer([http(json_=IA_PMU)], course=0, presse=PRESSE)  # R1C1, terminée
+    assert p.call_count == 1  # aucune recherche internet : le résultat ne doit pas fuiter
+    analyses = pd.read_csv(tmp_path / "Analyses.csv", dtype=str, keep_default_na=False)
+    assert analyses.iloc[0]["course"] == "R1C1" and analyses.iloc[0]["date_course"]
+
+
+def test_recuperer_arrivee_et_mettre_a_jour_le_ticket(tmp_path):
+    at, _ = lancer([http(json_=IA_PMU)], course=0)
+    with mock.patch("requests.get", side_effect=faux_get):
+        bouton(at, "enregistrer le ticket").click().run()
+        bouton(at, "Récupérer les arrivées").click().run()
+    assert any("1 arrivée(s) récupérée(s) · 1 ticket(s) mis à jour" in i for i in textes(at.info))
+    analyses = pd.read_csv(tmp_path / "Analyses.csv", dtype=str, keep_default_na=False)
+    assert analyses.iloc[0]["gagnant"] == "5" and analyses.iloc[0]["source_resultat"] == "PMU officiel : 10.4"
+    ticket = pd.read_csv(tmp_path / "TurfMaster.csv", dtype={"chevaux": str}).iloc[0]
+    assert ticket["resultat"] == "Gagné" and ticket["source_gain"] == "rapport officiel PMU"
+    assert ticket["gain_reel"] == pytest.approx(ticket["mise"] * 10.4)
+    assert any("1 course(s) mesurée(s)" in i for i in textes(at.info))
+
+
+def test_arrivee_course_collee_par_gemini(tmp_path):
+    at, _ = lancer([http()], recherche=False)
+    arrivee = http(json_={"gagnant": "4"})
+    arrivee.json.return_value["candidates"][0]["groundingMetadata"] = {"groundingChunks": [{"web": {"title": "pmu.fr"}}]}
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post", return_value=arrivee) as p:
+        at.checkbox[0].check().run()
+        bouton(at, "Récupérer les arrivées").click().run()
+    assert p.call_count == 1
+    analyses = pd.read_csv(tmp_path / "Analyses.csv", dtype=str, keep_default_na=False)
+    assert analyses.iloc[0]["gagnant"] == "4" and "non officiel" in analyses.iloc[0]["source_resultat"]
+
+
+def test_arrivee_collee_sans_gemini_ne_consomme_rien():
+    at, _ = lancer([http()], recherche=False)
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p:
+        bouton(at, "Récupérer les arrivées").click().run()
+    assert p.call_count == 0
+    assert any("cochez la recherche Gemini" in i for i in textes(at.info))
+
+
+def test_programme_pmu_indisponible():
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.secrets["gemini"] = {"api_key": "CLE-TEST"}
+    with mock.patch("requests.get", side_effect=requests.ConnectionError()):
+        at.run()
+    assert any("injoignable" in e for e in textes(at.error)) and not at.exception
 
 
 # --- Pronostics de la presse ------------------------------------------------

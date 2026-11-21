@@ -1,0 +1,58 @@
+{
+ "programme": {
+  "reunions": [
+   {
+    "numOfficiel": 1,
+    "hippodrome": {
+     "libelleCourt": "AUTEUIL"
+    },
+    "pays": {
+     "code": "FRA"
+    },
+    "courses": [
+     {
+      "numReunion": 1,
+      "numOrdre": 1,
+      "libelle": "STEEPLE-CHASE NATIONAL DES ANGLO-ARABES",
+      "discipline": "STEEPLECHASE",
+      "distance": 4400,
+      "heureDepart": 1795259580000,
+      "nombreDeclaresPartants": 7,
+      "statut": "ARRIVEE_DEFINITIVE_COMPLETE",
+      "ordreArrivee": [
+       [
+        5
+       ],
+       [
+        1
+       ],
+       [
+        6
+       ],
+       [
+        2
+       ],
+       [
+        3
+       ],
+       [
+        4
+       ]
+      ]
+     },
+     {
+      "numReunion": 1,
+      "numOrdre": 2,
+      "libelle": "PRIX A VENIR",
+      "discipline": "STEEPLECHASE",
+      "distance": 4400,
+      "heureDepart": 1795263180000,
+      "nombreDeclaresPartants": 7,
+      "statut": "PROGRAMMEE",
+      "ordreArrivee": null
+     }
+    ]
+   }
+  ]
+ }
+}
