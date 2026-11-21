@@ -167,3 +167,70 @@ def test_prompt():
     p = tl.construire_prompt("1 - A (F | 1a)", "Auteuil", "Obstacles", "Prudent", "Soleil, terrain souple")
     assert "Simple Placé" in p and "Soleil, terrain souple" in p and "CHAQUE partant" in p
     assert "❔" in tl.construire_prompt("x", "Auteuil", "Obstacles", "Offensif", "AUCUNE DONNÉE")
+
+
+
+# --- Pronostics publiés ------------------------------------------------------
+
+CONSULTEES = [{"titre": "paris-turf.com", "url": "https://r/1", "domaine": "paris-turf.com"},
+              {"titre": "equidia.fr", "url": "https://r/2", "domaine": "equidia.fr"}]
+
+
+def test_compiler_pronostics():
+    rep = {"sources": [
+        {"nom": "Paris-Turf", "site": "https://www.paris-turf.com/pronos", "selection": ["5", "4", "1", "12"]},
+        {"nom": "Equidia", "site": "equidia.fr", "selection": ["05", "1", "3", "1"]},
+        {"nom": "Inventé", "site": "faux.com", "selection": ["7"]},
+        {"nom": "Vide", "site": "equidia.fr", "selection": []},
+    ]}
+    c = tl.compiler_pronostics(rep, CONSULTEES, site())
+    assert [s["nom"] for s in c["sources"]] == ["Paris-Turf", "Equidia"]
+    assert c["ecartees"] == 1
+    assert c["alertes"] == ["Paris-Turf cite des numéros absents (12) : ignorés."]
+    assert [(e["num"], e["points"], e["citations"], e["premier"]) for e in c["consensus"]] == [
+        ("5", 10, 2, 2), ("1", 7, 2, 0), ("4", 4, 1, 0), ("3", 3, 1, 0)]
+    assert tl.texte_consensus(c).splitlines()[0] == "n° 5 LOKI DE LA BRUNIE : 10 pts, cité par 2/2 sources, 1er choix de 2"
+
+
+def test_compiler_pronostics_vide_ou_invalide():
+    for rep in [None, {}, {"sources": "x"}, {"sources": [{"nom": "A", "site": "a.fr", "selection": ["5"]}]}]:
+        c = tl.compiler_pronostics(rep, CONSULTEES, site())
+        assert c["sources"] == [] and tl.texte_consensus(c) is None
+
+
+def test_domaine():
+    assert tl._domaine("https://www.Paris-Turf.com/x") == "paris-turf.com"
+    assert tl._domaine("Equidia") is None
+
+
+
+def test_source_ecrite_autrement_que_le_domaine():
+    consultees = [{"titre": d, "url": f"https://r/{d}", "domaine": d}
+                  for d in ["frequence-turf.fr", "jeu-legal-france.fr", "canalturf.com", "zeturf.fr"]]
+    rep = {"sources": [
+        {"nom": "Fréquence Turf", "site": "frequenceturf.fr", "selection": ["5"]},     # tirets oubliés
+        {"nom": "Jeu Legal France", "site": "jeulegalfrance.fr", "selection": ["4"]},
+        {"nom": "Canalturf", "site": "", "selection": ["1"]},                          # site absent, nom = domaine
+        {"nom": "ZETURF", "site": "www.zeturf.fr", "selection": ["3"]},
+        {"nom": "Vertex AI Search (Synthèse de dix sources)", "site": "", "selection": ["5"]},  # pas un site
+        {"nom": "Turf Inventé", "site": "turfinvente.fr", "selection": ["5"]},
+    ]}
+    c = tl.compiler_pronostics(rep, consultees, site())
+    assert [s["domaine"] for s in c["sources"]] == ["frequence-turf.fr", "jeu-legal-france.fr", "canalturf.com", "zeturf.fr"]
+    assert c["ecartees"] == 2
+
+
+
+def test_lire_pronostics():
+    texte = """Voici les pronostics trouvés :
+
+RueDesJoueurs (experte) | ruedesjoueurs.com | 10-8-12-7-13
+**Canalturf** | canalturf.com | 10 - 12 - 9
+Ligne sans format
+ZETURF | zeturf.com | aucun numéro
+"""
+    assert tl.lire_pronostics(texte) == {"sources": [
+        {"nom": "RueDesJoueurs (experte)", "site": "ruedesjoueurs.com", "selection": ["10", "8", "12", "7", "13"]},
+        {"nom": "Canalturf", "site": "canalturf.com", "selection": ["10", "12", "9"]}]}
+    assert tl.lire_pronostics("AUCUN") == {"sources": []}
+    assert tl.lire_pronostics('{"sources": [{"nom": "A", "site": "a.fr", "selection": ["1"]}]}')["sources"][0]["nom"] == "A"

@@ -2,6 +2,7 @@
 calcul de la mise et statistiques. Séparée de app.py pour pouvoir être testée."""
 import json
 import re
+import unicodedata
 
 import pandas as pd
 import requests
@@ -184,11 +185,12 @@ def probas_marche(df):
     return {num: inv / total for num, inv in inverses.items()}
 
 
-def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
+def evaluer_pari(chevaux, df, capital, profil, budget_restant=None, confiance=CONFIANCE_IA):
     """Décide s'il faut jouer.
 
     chevaux : sortie de valider_reponse()['chevaux'] (num, p entre 0 et 1).
     budget_restant : pertes encore autorisées sur la période (None = pas de limite).
+    confiance : part de l'IA dans la probabilité retenue (mesurée sur l'historique, voir mesure.py).
     Retourne {"jouer", "raison" (phrase courte), "detail", "pari", "analyse"}.
     """
     regles = PROFILS[profil]
@@ -200,7 +202,7 @@ def evaluer_pari(chevaux, df, capital, profil, budget_restant=None):
         p = ia.get(num)
         cote = None if pd.isna(cote) else float(cote)
         q = marche.get(num) if marche else None
-        retenue = CONFIANCE_IA * p + (1 - CONFIANCE_IA) * q if (p is not None and q is not None) else None
+        retenue = confiance * p + (1 - confiance) * q if (p is not None and q is not None) else None
         lignes.append({
             "num": num, "nom": row["NOM"], "cote": cote, "proba_ia": p, "proba_marche": q,
             "proba_retenue": retenue,
@@ -278,7 +280,8 @@ MESSAGES_HTTP = {
 }
 
 
-def _poster(api_key, payload):
+def _requete(api_key, payload):
+    """Appel brut à Gemini, retourne la réponse JSON. Lève GeminiErreur."""
     # La clé passe dans un en-tête et non dans l'URL : elle n'apparaît pas dans les journaux.
     try:
         response = requests.post(URL_GEMINI, json=payload, headers={"x-goog-api-key": api_key}, timeout=60)
@@ -290,13 +293,24 @@ def _poster(api_key, payload):
         raise GeminiErreur(MESSAGES_HTTP.get(
             response.status_code, f"Gemini a renvoyé une erreur (code {response.status_code})."))
     try:
-        parts = response.json()['candidates'][0]['content']['parts']
+        return response.json()
+    except ValueError:
+        raise GeminiErreur("Réponse de Gemini illisible. Réessayez.")
+
+
+def _texte(data):
+    try:
+        parts = data['candidates'][0]['content']['parts']
         texte = "".join(p.get('text', '') for p in parts)
-    except (ValueError, KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError, AttributeError):
         texte = ""
     if not texte.strip():
         raise GeminiErreur("Réponse de Gemini vide ou bloquée. Réessayez.")
     return texte
+
+
+def _poster(api_key, payload):
+    return _texte(_requete(api_key, payload))
 
 
 def rechercher_contexte(api_key, hippo, discipline, jour):
@@ -310,12 +324,16 @@ def rechercher_contexte(api_key, hippo, discipline, jour):
                              "generationConfig": {"temperature": 0.1}})
 
 
-def construire_prompt(partants_str, hippo, discipline, profil, contexte):
+def construire_prompt(partants_str, hippo, discipline, profil, contexte, presse=None):
     if contexte and "AUCUNE DONNÉE" not in contexte:
         bloc_contexte = f"CONTEXTE DU JOUR (recherche internet) :\n{contexte}"
     else:
         bloc_contexte = ("Aucune donnée du jour : si tu ne connais pas la météo ou la distance, "
                          "mets \"❔\" plutôt que d'inventer.")
+    if presse:
+        bloc_contexte += ("\n\nPRONOSTICS PUBLIÉS (compilés depuis la presse et les sites de pronostics) :\n"
+                          f"{presse}\nC'est un avis parmi d'autres : les pronostiqueurs influencent aussi "
+                          "les cotes. Garde ton propre jugement.")
     return f"""Expert Turf. Hippodrome : {hippo} | Discipline : {discipline}.
 
 PARTANTS (numéro réel - nom (ferrure | musique, "(25)" = année 2025 | puis si connus :
@@ -422,15 +440,193 @@ def valider_reponse(res, df):
             "chevaux": chevaux, "combine": combine}, alertes
 
 
+# --- Pronostics publiés -----------------------------------------------------
+#
+# Gemini cherche les pronostics publiés pour la course. Pour éviter les sources
+# inventées, on ne garde que celles dont le site figure dans les pages que la
+# recherche Google a réellement consultées (« groundingChunks »).
+
+POINTS_RANG = [5, 4, 3, 2, 1]  # 1er choix d'une source = 5 points ... 5e choix = 1 point
+
+
+def _canon(texte):
+    """« Fréquence-Turf » -> « frequenceturf » : minuscules, sans accents ni ponctuation."""
+    sans_accents = unicodedata.normalize("NFKD", str(texte or "")).encode("ascii", "ignore").decode()
+    return re.sub(r'[^a-z0-9]', '', sans_accents.lower())
+
+
+def _source_consultee(site, nom, domaines):
+    """Domaine consulté qui correspond à la source, ou None.
+
+    Gemini écrit parfois le domaine autrement (« frequenceturf.fr » pour « frequence-turf.fr ») :
+    on compare sans tirets ni accents, sur le domaine puis sur le nom de la source."""
+    dom = _domaine(site)
+    for d in domaines:
+        base = _canon(d.rsplit(".", 1)[0])
+        if dom and (_canon(dom) == _canon(d) or _canon(dom.rsplit(".", 1)[0]) == base
+                    or dom.endswith("." + d) or d.endswith("." + dom)):
+            return d
+        if len(base) >= 5 and _canon(nom) == base:
+            return d
+    return None
+
+
+def _domaine(texte):
+    m = re.search(r'((?:[a-z0-9-]+\.)+[a-z]{2,})', str(texte or "").lower())
+    return m.group(1).removeprefix("www.") if m else None
+
+
+def rechercher_pronostics(api_key, hippo, discipline, jour, partants_str, course=""):
+    """Retourne (texte de la réponse, sources consultées [{"titre", "url", "domaine"}]). Lève GeminiErreur.
+
+    La réponse est demandée en texte simple, une ligne par source : avec un JSON imposé,
+    Gemini lance ses recherches mais répond sans lire les pages (aucune page consultée),
+    et ses sélections ne sont alors pas vérifiables."""
+    nom_course = f" « {course} »" if course else ""
+    prompt = f"""Quels pronostics ont été publiés pour la course de {discipline.lower()}{nom_course},
+courue aujourd'hui {jour} à {hippo} ? Cherche sur les sites de pronostics et la presse hippique,
+et lis leurs pages.
+
+Partants (numéro - nom) :
+{partants_str}
+
+Pour chaque source dont tu as lu le pronostic, écris UNE ligne exactement sous cette forme :
+SOURCE | site | numéros dans l'ordre séparés par des tirets
+Exemple de forme : Nom du site | exemple.fr | 3-7-1
+N'invente rien. N'écris rien d'autre. Si tu n'as trouvé aucun pronostic, écris : AUCUN"""
+    data = _requete(api_key, {"contents": [{"parts": [{"text": prompt}]}],
+                              "tools": [{"google_search": {}}],
+                              "generationConfig": {"temperature": 0.1}})
+    texte = _texte(data)
+    consultees = []
+    try:
+        chunks = data['candidates'][0].get('groundingMetadata', {}).get('groundingChunks', [])
+    except (KeyError, IndexError, AttributeError):
+        chunks = []
+    for ch in chunks:
+        web = ch.get("web", {}) if isinstance(ch, dict) else {}
+        dom = _domaine(web.get("title")) or _domaine(web.get("uri"))
+        if dom:
+            consultees.append({"titre": web.get("title", dom), "url": web.get("uri"), "domaine": dom})
+    return texte, consultees
+
+
+def lire_pronostics(texte):
+    """Texte de rechercher_pronostics -> {"sources": [{"nom", "site", "selection"}]}.
+    Accepte les lignes « SOURCE | site | 3-7-1 » (et, par compatibilité, un JSON)."""
+    sources = []
+    for ligne in str(texte or "").splitlines():
+        morceaux = [m.strip(" *`-") for m in ligne.split("|")]
+        if len(morceaux) < 3:
+            continue
+        nums = re.findall(r'\d{1,2}', morceaux[2])
+        if morceaux[0] and nums:
+            sources.append({"nom": morceaux[0], "site": morceaux[1], "selection": nums})
+    if not sources and "{" in str(texte):
+        try:
+            return extraire_json(texte)
+        except ValueError:
+            pass
+    return {"sources": sources}
+
+
+def compiler_pronostics(reponse, consultees, df):
+    """Garde les sources vérifiables et calcule le consensus.
+
+    Retourne {"sources", "ecartees", "ecartees_noms", "nb_consultees", "consensus", "alertes"} ;
+    consensus trié par points,
+    une entrée par cheval cité : {"num", "nom", "points", "citations", "premier"}.
+    """
+    noms = {str(int(n)): nom for n, nom in zip(df["NUM"], df["NOM"]) if str(n).isdigit()}
+    domaines = {c["domaine"]: c for c in consultees}
+    sources, ecartees, ecartees_noms, alertes = [], 0, [], []
+    for src in (reponse or {}).get("sources", []) if isinstance(reponse, dict) else []:
+        if not isinstance(src, dict):
+            continue
+        dom = _domaine(src.get("site")) or _domaine(src.get("nom"))
+        trouve = _source_consultee(src.get("site") or src.get("nom"), src.get("nom"), domaines)
+        if trouve is None:
+            ecartees += 1
+            ecartees_noms.append(str(src.get("nom") or src.get("site") or "?"))
+            continue
+        selection, inconnus = [], []
+        for n in src.get("selection", []) if isinstance(src.get("selection"), list) else []:
+            num = _numero(n)
+            if num in noms and num not in selection:
+                selection.append(num)
+            elif num and num not in noms:
+                inconnus.append(num)
+        if inconnus:
+            alertes.append(f"{src.get('nom') or dom} cite des numéros absents ({', '.join(inconnus)}) : ignorés.")
+        if selection:
+            sources.append({"nom": str(src.get("nom") or dom), "domaine": trouve,
+                            "url": domaines[trouve]["url"], "selection": selection[:5]})
+
+    points = {}
+    for src in sources:
+        for rang, num in enumerate(src["selection"]):
+            e = points.setdefault(num, {"num": num, "nom": noms[num], "points": 0, "citations": 0, "premier": 0})
+            e["points"] += POINTS_RANG[rang]
+            e["citations"] += 1
+            e["premier"] += rang == 0
+    consensus = sorted(points.values(), key=lambda e: (-e["points"], -e["citations"]))
+    return {"sources": sources, "ecartees": ecartees, "ecartees_noms": ecartees_noms,
+            "nb_consultees": len(domaines), "consensus": consensus, "alertes": alertes}
+
+
+def texte_consensus(compil):
+    """Résumé du consensus pour le prompt d'analyse ; None s'il n'y a aucune source."""
+    if not compil or not compil["sources"]:
+        return None
+    n = len(compil["sources"])
+    lignes = []
+    for e in compil["consensus"]:
+        ligne = f"n° {e['num']} {e['nom']} : {e['points']} pts, cité par {e['citations']}/{n} sources"
+        if e["premier"]:
+            ligne += f", 1er choix de {e['premier']}"
+        lignes.append(ligne)
+    return "\n".join(lignes)
+
+
+# --- Arrivée d'une course collée (sans numéro PMU) ---------------------------
+
+def rechercher_arrivee(api_key, jour, hippo, partants_noms):
+    """Cherche le gagnant d'une course passée. Retourne le numéro, ou None si introuvable
+    ou non vérifiable (aucune page consultée par la recherche). Lève GeminiErreur."""
+    prompt = f"""Cherche sur internet l'ARRIVÉE OFFICIELLE de cette course hippique, courue le {jour} à {hippo}.
+
+Partants (numéro - nom) :
+{partants_noms}
+
+Réponds UNIQUEMENT avec ce JSON : {{"gagnant": "<numéro du gagnant>"}}
+Si tu ne trouves pas l'arrivée officielle avec certitude, réponds {{"gagnant": null}}.
+"""
+    data = _requete(api_key, {"contents": [{"parts": [{"text": prompt}]}],
+                              "tools": [{"google_search": {}}],
+                              "generationConfig": {"temperature": 0}})
+    try:
+        pages = data['candidates'][0].get('groundingMetadata', {}).get('groundingChunks', [])
+    except (KeyError, IndexError, AttributeError):
+        pages = []
+    if not pages:
+        return None
+    try:
+        return _numero(extraire_json(_texte(data)).get("gagnant")) or None
+    except (ValueError, AttributeError):
+        return None
+
+
 # --- Historique ----------------------------------------------------------
 
 COLONNES_HISTORIQUE = ["date", "hippodrome", "discipline", "profil", "pari", "chevaux",
-                       "cote", "proba_ia", "gain_espere", "mise", "resultat", "gain_reel"]
+                       "cote", "proba_ia", "gain_espere", "mise", "resultat", "gain_reel",
+                       "course", "analyse", "source_gain"]
 RESULTATS = ["En attente", "Gagné", "Perdu"]
 
 
-def ligne_historique(date, hippo, discipline, profil, pari):
-    return {"date": date, "hippodrome": hippo, "discipline": discipline, "profil": profil,
+def ligne_historique(date, hippo, discipline, profil, pari, course="", analyse=""):
+    return {"course": course, "analyse": analyse, "source_gain": "",
+            "date": date, "hippodrome": hippo, "discipline": discipline, "profil": profil,
             "pari": pari["type"], "chevaux": pari["num"], "cote": pari["cote"],
             "proba_ia": round(pari["proba_retenue"], 3), "gain_espere": round(pari["gain_espere"], 3),
             "mise": pari["mise"], "resultat": "En attente", "gain_reel": 0.0}
