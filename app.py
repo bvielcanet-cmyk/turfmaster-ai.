@@ -195,7 +195,7 @@ class Stockage:
         for col in colonnes:
             if col not in df.columns:
                 df[col] = ""
-        return df[colonnes], True
+        return mesure.normaliser(df[colonnes]), True
 
     def ecrire(self, feuille, df, existe):
         if self.local:
@@ -232,7 +232,7 @@ def recuperer_arrivees(stockage, avec_gemini, maximum_gemini=5):
         try:
             if a["course"]:
                 reunion, course = pmu.decouper_id(a["course"])
-                arr = pmu.arrivee(str(a["date_course"]).zfill(8), reunion, course)
+                arr = pmu.arrivee(a["date_course"].zfill(8), reunion, course)
                 if arr["annulee"]:
                     analyses.at[i, "gagnant"], analyses.at[i, "source_resultat"] = "annulée", "PMU officiel"
                     trouves += 1
@@ -488,7 +488,8 @@ with onglet_prono:
                     decision = tl.evaluer_pari(res["chevaux"], df, capital, profil, budget, confiance)
 
                     # Chaque analyse est enregistrée, jouée ou non, pour mesurer la précision
-                    identifiant = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                    # préfixe « A » : l'identifiant reste du texte quand Google Sheets le relit
+                    identifiant = "A" + datetime.now().strftime("%Y%m%d%H%M%S%f")
                     try:
                         ligne = mesure.ligne_analyse(
                             identifiant, datetime.now().strftime("%Y-%m-%d %H:%M"),

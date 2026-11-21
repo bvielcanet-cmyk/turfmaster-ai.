@@ -86,3 +86,15 @@ def test_mettre_a_jour_tickets():
     assert maj["resultat"].tolist() == ["Gagné", "Gagné", "Perdu", "Gagné", "En attente", "Perdu"]
     assert maj["gain_reel"].tolist() == [104.0, 60.0, 0.0, 10.0, 0.0, 0.0]
     assert maj["source_gain"].tolist()[:2] == ["rapport officiel PMU", "estimé (cote au moment du pari)"]
+
+
+
+@pytest.mark.parametrize("valeur, attendu", [(None, ""), (float("nan"), ""), ("nan", ""), (5.0, "5"), (5, "5"),
+                                             ("R1C3", "R1C3"), (" 4 ", "4"), (2.5, "2.5")])
+def test_texte_cellule(valeur, attendu):
+    assert mesure.texte_cellule(valeur) == attendu
+
+
+def test_en_attente_avec_cellules_vides_relues():
+    df = pd.DataFrame({"gagnant": [float("nan"), 5.0, ""]})
+    assert list(mesure.en_attente(df).index) == [0, 2]
