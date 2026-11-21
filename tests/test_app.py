@@ -428,3 +428,42 @@ def test_presse_sans_page_consultee():
     sans_pages = http_presse([{"nom": "Paris-Turf", "site": "paris-turf.com", "selection": ["5"]}], consultees=())
     at, _ = lancer([http()], presse=sans_pages)
     assert any("aucune page vérifiable" in c and "(Paris-Turf)" in c for c in textes(at.caption))
+
+
+
+class SheetsEnPanne(FauxSheets):
+    """Google Sheet qui refuse l'accès, comme gspread quand le classeur n'est pas partagé."""
+
+    def __init__(self, erreur):
+        super().__init__()
+        self.erreur = erreur
+
+    def read(self, worksheet=None, ttl=None):
+        raise self.erreur
+
+    def update(self, worksheet=None, data=None):
+        raise self.erreur
+
+    create = update
+
+
+class APIError(Exception):
+    pass
+
+
+class SpreadsheetNotFound(Exception):
+    pass
+
+
+@pytest.mark.parametrize("erreur, cause", [
+    (APIError("{'code': 403, 'message': 'The caller does not have permission', 'status': 'PERMISSION_DENIED'}"),
+     "Accès refusé : partagez le classeur"),
+    (APIError("Google Drive API has not been used in project 123 before or it is disabled."),
+     "API Google n'est pas activée"),
+    (SpreadsheetNotFound(""), "Classeur introuvable"),
+    (ValueError("Could not deserialize key data."), "Clé du compte de service invalide"),
+])
+def test_erreur_google_sheets_expliquee(erreur, cause):
+    at, _ = lancer([http()], sheets=SheetsEnPanne(erreur), recherche=False)
+    assert any("Analyse non enregistrée" in c and cause in c for c in textes(at.caption)), textes(at.caption)
+    assert any(cause in e for e in textes(at.error))  # rappel en tête de l'onglet Historique
