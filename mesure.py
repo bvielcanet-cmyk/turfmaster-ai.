@@ -20,7 +20,8 @@ import pandas as pd
 COLONNES_ANALYSES = ["id", "date", "date_course", "course", "hippodrome", "discipline", "profil",
                      "partants", "decision", "pari_num", "mise", "gagnant", "source_resultat"]
 MINIMUM_COURSES = 30
-COLONNES_NUMERIQUES = {"mise", "gain_reel", "cote", "proba_ia", "gain_espere"}
+COLONNES_NUMERIQUES = {"mise", "gain_reel", "cote", "proba_ia", "gain_espere", "proba", "cote_min",
+                       "rapport", "gain"}
 
 
 def texte_cellule(valeur):

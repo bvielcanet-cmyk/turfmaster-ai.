@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 import mesure
+import place
 import pmu
 import turf_logic as tl
 
@@ -31,6 +32,10 @@ st.markdown("""
     .tm-titre { font-size: 1.7rem; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
     .tm-oui .tm-titre { color: #1e9e4a; }
     .tm-non .tm-titre { color: #d9822b; }
+    .tm-place { border-color: #2563eb; background: rgba(37, 99, 235, .10); }
+    .tm-place .tm-titre { color: #3b82f6; }
+    .tm-neutre { border-color: rgba(127, 127, 127, .5); background: rgba(127, 127, 127, .08); }
+    .tm-neutre .tm-titre { font-size: 1.15rem; opacity: .8; }
     .tm-pari { font-size: 1.2rem; font-weight: 700; margin-top: 6px; }
     .tm-chiffres { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 8px; }
     .tm-chiffres div { flex: 1 1 110px; background: rgba(127, 127, 127, .14); border-radius: 10px; padding: 8px 12px; }
@@ -71,6 +76,7 @@ except Exception:
 
 FEUILLE = "TurfMaster"  # onglet du Google Sheet où sont rangés les tickets
 FEUILLE_ANALYSES = "Analyses"  # onglet où sont rangées toutes les analyses (mesure de précision)
+FEUILLE_SUIVI = "ConseilsPlace"  # onglet du suivi à blanc des conseils Simple Placé
 AUTO = "Auto (d'après la musique)"
 
 
@@ -223,6 +229,53 @@ def partants_pmu(jour, reunion, course):
     return pmu.partants(jour, reunion, course)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def cotes_place_pmu(jour, reunion, course):
+    return pmu.cotes_place(jour, reunion, course)
+
+
+def calculer_conseil_place(stockage, course_pmu, jour, df, profil, capital, budget):
+    """Conseil Simple Placé (sans IA) ; enregistré dans le suivi à blanc si la course n'est pas partie.
+    Retourne {"conseil", "note"}."""
+    try:
+        conseil = place.conseil_place(df, cotes_place_pmu(jour, course_pmu["reunion"], course_pmu["course"]),
+                                      profil, capital, budget)
+    except pmu.PmuErreur as e:
+        return {"conseil": None, "note": f"Cotes du Placé indisponibles ({e})."}
+    if conseil is None:
+        return {"conseil": None, "note": None}
+    if course_pmu["statut"] != "à venir" or pmu.depart_passe(course_pmu, jour):
+        return {"conseil": conseil, "note": "Course déjà partie : ce conseil n'est pas compté dans le suivi à blanc."}
+    try:
+        suivi, existe = stockage.lire(FEUILLE_SUIVI, place.COLONNES_SUIVI)
+        ligne = place.ligne_suivi("P" + datetime.now().strftime("%Y%m%d%H%M%S%f"),
+                                  datetime.now().strftime("%Y-%m-%d %H:%M"), pmu.date_pmu(jour), course_pmu["id"],
+                                  course_pmu["hippodrome"], conseil)
+        stockage.ecrire(FEUILLE_SUIVI, place.ajouter_suivi(suivi, ligne), existe)
+        note = None
+    except Exception:
+        note = "Conseil non enregistré dans le suivi. " + (stockage.derniere_erreur or "")
+    return {"conseil": conseil, "note": note}
+
+
+def conseil_place_html(c, profil):
+    if c is None:
+        return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">🎯 Pas de Placé intéressant</div>'
+                '<div class="tm-pourquoi">Aucun Simple Placé de cette course n\'a une cote assez généreuse '
+                'par rapport à ses chances.</div></div>')
+    return f"""<div class="tm-verdict tm-place">
+<div class="tm-titre">🎯 PLACÉ CONSEILLÉ</div>
+<div class="tm-pari">Simple Placé · n° {escape(c['num'])} {escape(c['nom'])}</div>
+<div class="tm-chiffres">
+<div><span>Mise ({escape(profil)})</span><b>{euros(c['mise'])}</b><small>mise fixe, en test</small></div>
+<div><span>Cote Placé probable</span><b>{c['cote_min']:g} – {c['cote_max']:g}</b><small>jouer seulement si le minimum reste ≥ {c['cote_mini_a_jouer']:.2f}</small></div>
+<div><span>Gain espéré</span><b>{c['gain_espere'] * 100:+.0f}\u00a0%</b><small>calcul souvent optimiste</small></div>
+</div>
+<div class="tm-pourquoi">🧪 <b>Phase de test (suivi à blanc)</b> : ce conseil est noté et sera réglé automatiquement
+au rapport officiel. Ne misez pas avant d'avoir vu le bilan dans l'onglet Historique.</div>
+</div>"""
+
+
 def tester_courses_passees(stockage, profil, capital, confiance, nombre=5, jours=7):
     """Analyse `nombre` courses françaises déjà courues (jours précédents), sans recherche internet,
     et les enregistre avec leur gagnant officiel : la mesure de précision avance d'autant.
@@ -287,12 +340,20 @@ def recuperer_arrivees(stockage, avec_gemini, maximum_gemini=5):
     Retourne un message de compte rendu."""
     analyses, existe_a = stockage.lire(FEUILLE_ANALYSES, mesure.COLONNES_ANALYSES)
     attente = mesure.en_attente(analyses)
+    memo = {}
+
+    def arrivee_pmu(date_course, course_id):  # une seule requête par course, même si plusieurs lignes
+        cle = (date_course, course_id)
+        if cle not in memo:
+            reunion, course = pmu.decouper_id(course_id)
+            memo[cle] = pmu.arrivee(date_course.zfill(8), reunion, course)
+        return memo[cle]
+
     trouves, pas_finies, gemini_utilises, erreurs = 0, 0, 0, []
     for i, a in attente.iterrows():
         try:
             if a["course"]:
-                reunion, course = pmu.decouper_id(a["course"])
-                arr = pmu.arrivee(a["date_course"].zfill(8), reunion, course)
+                arr = arrivee_pmu(a["date_course"], a["course"])
                 if arr["annulee"]:
                     analyses.at[i, "gagnant"], analyses.at[i, "source_resultat"] = "annulée", "PMU officiel"
                     trouves += 1
@@ -325,7 +386,20 @@ def recuperer_arrivees(stockage, avec_gemini, maximum_gemini=5):
             stockage.ecrire(FEUILLE, tickets, existe_t)
     else:
         modifies = 0
-    morceaux = [f"{trouves} arrivée(s) récupérée(s)", f"{modifies} ticket(s) mis à jour"]
+
+    # Conseils Placé du suivi à blanc
+    suivi, existe_s = stockage.lire(FEUILLE_SUIVI, place.COLONNES_SUIVI)
+    regles = 0
+    for i, c in suivi[suivi["resultat"] == "En attente"].iterrows():
+        try:
+            regles += place.regler(suivi, i, arrivee_pmu(c["date_course"], c["course"]))
+        except (pmu.PmuErreur, ValueError) as e:
+            erreurs.append(str(e))
+    if regles:
+        stockage.ecrire(FEUILLE_SUIVI, suivi, existe_s)
+
+    morceaux = [f"{trouves} arrivée(s) récupérée(s)", f"{modifies} ticket(s) mis à jour",
+                f"{regles} conseil(s) Placé réglé(s)"]
     if pas_finies:
         morceaux.append(f"{pas_finies} course(s) pas encore terminée(s)")
     restantes = len(attente) - trouves - pas_finies
@@ -483,8 +557,30 @@ with onglet_prono:
         txt_in = st.text_area("Collez les partants copiés depuis un site (avec les cotes), ou un cheval par ligne "
                               "(ex: 12 FAKIR D4 1a 2a 4.5)", height=200)
 
-    if st.button("⚡ ANALYSER LA COURSE", width="stretch"):
+    def budget_pertes():
+        if limite_pertes <= 0:
+            return None
+        histo, _ = stockage.lire(FEUILLE, tl.COLONNES_HISTORIQUE)
+        return limite_pertes - max(tl.pertes_recentes(histo, pd.Timestamp.now()), 0)
+
+    def conseil_pour(df):
+        st.session_state["conseil"] = {"course": course_pmu["id"], "jour": jour, "profil": profil,
+                                       **calculer_conseil_place(stockage, course_pmu, jour, df, profil,
+                                                                capital, budget_pertes())}
+
+    if source == PMU and course_pmu and st.button(
+            "🎯 CONSEIL PLACÉ (gratuit, sans IA)", width="stretch",
+            help="Règle confirmée sur des courses passées : compare les chances de placé (déduites des cotes "
+                 "du Gagnant) aux cotes probables du Placé. Aucune requête Gemini."):
         st.session_state.pop("resultat", None)
+        try:
+            conseil_pour(partants_pmu(jour, course_pmu["reunion"], course_pmu["course"]))
+        except pmu.PmuErreur as e:
+            st.error(f"❌ {e}")
+
+    if st.button("⚡ ANALYSER LA COURSE (IA)", width="stretch"):
+        st.session_state.pop("resultat", None)
+        st.session_state.pop("conseil", None)
         lignes_ignorees = []
         try:
             if source == PMU:
@@ -502,6 +598,8 @@ with onglet_prono:
             st.error("Choisissez une course du programme, ou collez des partants (ex: 12 NOM).")
         else:
             notes = []
+            if course_pmu:
+                conseil_pour(df)  # le conseil Placé ne dépend pas de l'IA : il s'affiche même si Gemini échoue
             terminee = bool(course_pmu and course_pmu["statut"] == "terminée")
             detectee = (course_pmu["discipline"] if course_pmu and course_pmu["discipline"] != "Non précisée"
                         else tl.detecter_discipline(df))
@@ -541,10 +639,7 @@ with onglet_prono:
                     res, alertes = tl.valider_reponse(tl.extraire_json(raw), df)
                     alertes += alertes_presse
 
-                    budget = None
-                    if limite_pertes > 0:
-                        histo, _ = stockage.lire(FEUILLE, tl.COLONNES_HISTORIQUE)
-                        budget = limite_pertes - max(tl.pertes_recentes(histo, pd.Timestamp.now()), 0)
+                    budget = budget_pertes()
                     decision = tl.evaluer_pari(res["chevaux"], df, capital, profil, budget, confiance)
 
                     # Chaque analyse est enregistrée, jouée ou non, pour mesurer la précision
@@ -572,6 +667,13 @@ with onglet_prono:
                     st.error(f"❌ {e}")
                 except (ValueError, KeyError, TypeError):
                     st.error("Erreur d'analyse de la réponse Gemini. Réessayez l'envoi.")
+
+    # Conseil Placé de la course affichée (sans IA)
+    cp = st.session_state.get("conseil")
+    if cp and course_pmu and source == PMU and cp["course"] == course_pmu["id"] and cp["jour"] == jour:
+        st.markdown(conseil_place_html(cp["conseil"], cp["profil"]), unsafe_allow_html=True)
+        if cp["note"]:
+            st.caption(f"ℹ️ {cp['note']}")
 
     # Le résultat est gardé en mémoire : il reste affiché quand on clique sur « Enregistrer ».
     r = st.session_state.get("resultat")
@@ -682,6 +784,35 @@ with onglet_histo:
         st.rerun()
     if st.session_state.get("compte_rendu_test"):
         st.info(st.session_state.pop("compte_rendu_test"))
+
+    # 1 ter. Suivi à blanc des conseils Placé
+    st.markdown("#### 🎯 Conseils Placé — suivi à blanc")
+    suivi, _ = stockage.lire(FEUILLE_SUIVI, place.COLONNES_SUIVI)
+    bilan = place.stats_suivi(suivi)
+    if bilan["n"] == 0:
+        st.caption(f"Aucun conseil réglé pour l'instant ({bilan['en_attente']} en attente). Demandez des "
+                   "conseils Placé sur des courses à venir, puis « Récupérer les arrivées » après les courses.")
+    else:
+        m = st.columns(4)
+        m[0].metric("Conseils réglés", f"{bilan['n']} (+{bilan['en_attente']} en attente)")
+        m[1].metric("Placés", f"{bilan['places']:.0%}")
+        m[2].metric("Rendement (1 € par conseil)", f"{bilan['rendement'] * 100:+.1f} %")
+        m[3].metric("Gain fictif", f"{bilan['gain']:+.2f} €")
+        objectif = 100
+        if bilan["n"] < objectif:
+            st.caption(f"Objectif : {objectif} conseils réglés avant de miser pour de vrai "
+                       f"({bilan['n']}/{objectif}). Sur 479 courses passées, la règle a donné environ +18 %.")
+        elif bilan["rendement"] > 0:
+            st.success(f"Sur {bilan['n']} conseils réels, le rendement reste positif. Vous pouvez envisager "
+                       "de miser de petites sommes, en gardant la limite de pertes.")
+        else:
+            st.warning(f"Sur {bilan['n']} conseils réels, le rendement est négatif : la règle ne marche pas "
+                       "(ou plus). Ne misez pas.")
+    with st.expander(f"Détail des conseils ({len(suivi)})"):
+        if suivi.empty:
+            st.caption("Aucun conseil enregistré.")
+        else:
+            st.dataframe(suivi, hide_index=True, width="stretch")
 
     # 2. Précision de l'IA face aux cotes
     st.markdown("#### 📏 L'IA prévoit-elle mieux que les cotes ?")
