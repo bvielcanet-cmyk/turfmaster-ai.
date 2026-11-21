@@ -1,0 +1,39 @@
+{
+ "rapportsParticipant": [
+  {
+   "numPmu": 2,
+   "minRapportProbable": 2.2,
+   "maxRapportProbable": 2.7
+  },
+  {
+   "numPmu": 5,
+   "minRapportProbable": 4.3,
+   "maxRapportProbable": 5.5
+  },
+  {
+   "numPmu": 3,
+   "minRapportProbable": 3.3,
+   "maxRapportProbable": 4.1
+  },
+  {
+   "numPmu": 6,
+   "minRapportProbable": 3.1,
+   "maxRapportProbable": 3.9
+  },
+  {
+   "numPmu": 4,
+   "minRapportProbable": 1.9,
+   "maxRapportProbable": 2.3
+  },
+  {
+   "numPmu": 1,
+   "minRapportProbable": 1.7,
+   "maxRapportProbable": 2.1
+  },
+  {
+   "numPmu": 7,
+   "minRapportProbable": 6.5,
+   "maxRapportProbable": 8.1
+  }
+ ]
+}

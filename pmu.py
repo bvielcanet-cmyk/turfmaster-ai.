@@ -79,6 +79,16 @@ def programme(jour):
     return lire_programme(_get(f"{BASE}/{date_pmu(jour)}"))
 
 
+def depart_passe(c, jour, maintenant=None):
+    """L'heure de départ est-elle passée ? (le statut du PMU n'est pas toujours mis à jour)"""
+    maintenant = maintenant or datetime.now(tz=PARIS)
+    if jour < maintenant.date():
+        return True
+    if jour > maintenant.date() or c.get("heure", "?") == "?":
+        return False
+    return c["heure"] <= maintenant.strftime("%H:%M")
+
+
 def libelle_course(c):
     etat = "" if c["statut"] == "à venir" else f" — {c['statut']}"
     pays = "" if c["pays"] in ("FRA", "") else f" ({c['pays']})"
@@ -125,33 +135,55 @@ def partants(jour, reunion, course):
     return lire_partants(_get(f"{BASE}/{date_pmu(jour)}/R{reunion}/C{course}/participants"))
 
 
+# --- Cotes probables du Simple Placé -------------------------------------------
+
+def lire_cotes_place(data):
+    """{numéro: (cote probable minimale, maximale)} du Simple Placé."""
+    return {str(r["numPmu"]): (r["minRapportProbable"], r.get("maxRapportProbable") or r["minRapportProbable"])
+            for r in (data or {}).get("rapportsParticipant", []) if r.get("minRapportProbable")}
+
+
+def cotes_place(jour, reunion, course):
+    return lire_cotes_place(_get(f"{BASE}/{date_pmu(jour)}/R{reunion}/C{course}/rapports/SIMPLE_PLACE"))
+
+
 # --- Arrivée et rapports ------------------------------------------------------
 
-def lire_rapports_gagnant(data):
-    """{numéro: euros rapportés pour 1 € en Simple Gagnant} (les dividendes sont en centimes)."""
+def _lire_rapports(data, type_pari):
     for pari in data or []:
-        if pari.get("typePari") == "SIMPLE_GAGNANT":
+        if pari.get("typePari") == type_pari:
             return {str(r["combinaison"]): r["dividendePourUnEuro"] / 100
-                    for r in pari.get("rapports", []) if r.get("combinaison")}
+                    for r in pari.get("rapports", []) if str(r.get("combinaison", "")).isdigit()}
     return {}
 
 
+def lire_rapports_gagnant(data):
+    """{numéro: euros rapportés pour 1 € en Simple Gagnant} (les dividendes sont en centimes)."""
+    return _lire_rapports(data, "SIMPLE_GAGNANT")
+
+
+def lire_rapports_place(data):
+    """{numéro: euros rapportés pour 1 € en Simple Placé}, pour chaque cheval placé."""
+    return _lire_rapports(data, "SIMPLE_PLACE")
+
+
 def arrivee(date_course, reunion, course):
-    """{"terminee", "gagnant", "ordre", "rapports_gagnant"} pour une course (date « 21112026 »)."""
+    """{"terminee", "annulee", "gagnant", "ordre", "rapports_gagnant", "rapports_place"} (date « 21112026 »)."""
     data = _get(f"{BASE}/{date_course}")
     infos = next((c for c in lire_programme(data) if c["reunion"] == reunion and c["course"] == course), None)
     if infos is None:
         raise PmuErreur("Course introuvable au PMU.")
     terminee = infos["statut"] == "terminée" and bool(infos["arrivee"])
-    rapports = {}
+    definitifs = None
     if terminee:
         try:
-            rapports = lire_rapports_gagnant(_get(f"{BASE}/{date_course}/R{reunion}/C{course}/rapports-definitifs"))
+            definitifs = _get(f"{BASE}/{date_course}/R{reunion}/C{course}/rapports-definitifs")
         except PmuErreur:
-            rapports = {}
+            definitifs = None
     return {"terminee": terminee, "annulee": infos["statut"] == "annulée",
             "gagnant": infos["arrivee"][0] if terminee else None,
-            "ordre": infos["arrivee"], "rapports_gagnant": rapports}
+            "ordre": infos["arrivee"], "rapports_gagnant": lire_rapports_gagnant(definitifs),
+            "rapports_place": lire_rapports_place(definitifs)}
 
 
 def decouper_id(course_id):

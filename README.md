@@ -46,6 +46,32 @@ Pour le copier-coller :
 3. Cliquez sur **⚡ ANALYSER LA COURSE**. Si un pari est conseillé, **💾 Enregistrer le ticket**.
 4. Après la course, dans **📊 Historique**, indiquez *Gagné* ou *Perdu* et la somme rapportée.
 
+### 🎯 Conseil Placé (gratuit, sans IA)
+
+Pour une course du programme PMU, le bouton **🎯 CONSEIL PLACÉ** compare les chances de chaque cheval
+de finir placé (déduites des cotes du Simple Gagnant par la formule de Harville) aux **cotes
+probables du Simple Placé** publiées par le PMU. Quand un Placé paie plus que ses chances ne le
+justifient (gain espéré ≥ +10 %, cote probable minimale ≤ 20), il est conseillé. Aucune requête
+Gemini n'est utilisée.
+
+**Test sur des courses passées** (règle fixée avant le test de confirmation, 1 € par conseil,
+rapports officiels) :
+
+| Période | Courses | Conseils | Placés | Rendement |
+|---|---|---|---|---|
+| 22/09 → 31/10/2026 (confirmation) | 1 189 | 299 | 50,5 % | **+22 %** (intervalle à 90 % : +6 % à +40 %) |
+| 01/11 → 20/11/2026 | 728 | 180 | 48,9 % | +11 % |
+
+Ce décalage entre les paris Gagnant et Placé est un phénomène connu des paris mutuels. Mais ce
+sont des **résultats passés** : les cotes bougent jusqu'au départ (jouer dans les dernières minutes,
+seulement si la cote minimale reste au-dessus du seuil indiqué), et les chances de placé calculées
+sont optimistes (62 % prévus, 50 % réels). D'où une **mise fixe** (0,5 / 1 / 1,5 % du capital selon
+le profil) plutôt qu'un dosage de Kelly.
+
+**Suivi à blanc** : chaque conseil donné sur une course à venir est enregistré (onglet
+`ConseilsPlace`) et réglé au rapport officiel par « Récupérer les arrivées ». L'Historique affiche
+le bilan réel. **Attendez au moins 100 conseils réglés avec un rendement positif avant de miser.**
+
 ### Quand l'application conseille-t-elle de jouer ?
 
 Un pari n'est conseillé que si son intérêt peut être **mesuré** :
@@ -200,4 +226,5 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 - `turf_logic.py` : lecture des partants, décision de pari, appels Gemini, statistiques
 - `pmu.py` : programme, partants, cotes, arrivées et rapports du PMU
 - `mesure.py` : enregistrement des analyses, précision de l'IA face aux cotes
+- `place.py` : conseil Simple Placé (formule de Harville), suivi à blanc
 - `tests/` : tests automatiques

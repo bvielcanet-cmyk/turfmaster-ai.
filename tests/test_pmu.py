@@ -12,12 +12,14 @@ DONNEES = Path(__file__).parent / "donnees"
 PROGRAMME = json.loads((DONNEES / "pmu_programme.json").read_text())
 PARTICIPANTS = json.loads((DONNEES / "pmu_participants.json").read_text())
 RAPPORTS = json.loads((DONNEES / "pmu_rapports.json").read_text())
+PLACE_PROBABLES = json.loads((DONNEES / "pmu_place_probables.json").read_text())
 
 
 def faux_get(url, **kw):
     r = mock.Mock(status_code=200)
     r.json.return_value = (PARTICIPANTS if url.endswith("/participants") else
-                           RAPPORTS if url.endswith("/rapports-definitifs") else PROGRAMME)
+                           RAPPORTS if url.endswith("/rapports-definitifs") else
+                           PLACE_PROBABLES if url.endswith("/rapports/SIMPLE_PLACE") else PROGRAMME)
     return r
 
 
@@ -49,7 +51,7 @@ def test_arrivee():
         a = pmu.arrivee("21112026", 1, 1)
         b = pmu.arrivee("21112026", 1, 2)
     assert a == {"terminee": True, "annulee": False, "gagnant": "5", "ordre": ["5", "1", "6", "2", "3", "4"],
-                 "rapports_gagnant": {"5": 10.4}}
+                 "rapports_gagnant": {"5": 10.4}, "rapports_place": {"5": 4.3, "1": 2.0}}
     assert b["terminee"] is False and b["gagnant"] is None
 
 
@@ -68,3 +70,22 @@ def test_decouper_id():
     assert pmu.decouper_id("R1C3") == (1, 3)
     with pytest.raises(ValueError):
         pmu.decouper_id("")
+
+
+
+def test_cotes_place():
+    cotes = pmu.lire_cotes_place(PLACE_PROBABLES)
+    assert cotes["6"] == (3.1, 3.9) and cotes["1"] == (1.7, 2.1)
+    assert pmu.lire_cotes_place({}) == {}
+    assert pmu.lire_rapports_place(RAPPORTS) == {"5": 4.3, "1": 2.0}
+
+
+
+def test_depart_passe():
+    from datetime import date, datetime
+    c = {"heure": "13:00"}
+    midi = datetime(2026, 11, 21, 12, 0, tzinfo=pmu.PARIS)
+    assert not pmu.depart_passe(c, date(2026, 11, 21), midi)
+    assert pmu.depart_passe(c, date(2026, 11, 21), datetime(2026, 11, 21, 13, 5, tzinfo=pmu.PARIS))
+    assert pmu.depart_passe(c, date(2026, 11, 20), midi)        # jour passé
+    assert not pmu.depart_passe(c, date(2026, 11, 22), midi)    # jour futur

@@ -538,3 +538,101 @@ def test_tester_courses_passees_sans_doublon(tmp_path):
         bouton(at, "Tester l'IA sur 5 courses passées").click().run()
     assert p.call_count == 7  # 7 jours x 1 course : les 5 déjà testées ne sont pas refaites
     assert any("2 course(s) passée(s) testée(s)" in i and "Plus aucune" not in i for i in textes(at.info))
+
+
+
+# --- Conseil Placé et suivi à blanc ----------------------------------------------------
+
+def get_course2_terminee(url, **kw):
+    """Faux PMU où la course R1C2 est terminée : arrivée 6-1-5, STINGO (n° 6) placé à 3,40 €."""
+    import copy
+    r = faux_get(url, **kw)
+    data = copy.deepcopy(r.json.return_value)
+    if "programme" in data:
+        c2 = data["programme"]["reunions"][0]["courses"][1]
+        c2["statut"], c2["ordreArrivee"] = "ARRIVEE_DEFINITIVE_COMPLETE", [[6], [1], [5]]
+    elif url.endswith("/rapports-definitifs"):
+        data = [{"typePari": "SIMPLE_GAGNANT", "rapports": [{"combinaison": "6", "dividendePourUnEuro": 520}]},
+                {"typePari": "SIMPLE_PLACE", "rapports": [{"combinaison": "6", "dividendePourUnEuro": 340},
+                                                          {"combinaison": "1", "dividendePourUnEuro": 180}]}]
+    r = mock.Mock(status_code=200)
+    r.json.return_value = data
+    return r
+
+
+def conseil_html(at):
+    return " ".join(m.value for m in at.markdown if "tm-place" in m.value or "tm-neutre" in m.value)
+
+
+@pytest.fixture(autouse=True)
+def depart_a_venir(monkeypatch):
+    """Les courses « à venir » du faux programme sont datées du 21/11/2026 : on considère leur départ non passé."""
+    import pmu as module_pmu
+    monkeypatch.setattr(module_pmu, "depart_passe", lambda c, jour, maintenant=None: False)
+
+
+def test_conseil_place_sans_ia_et_suivi(tmp_path):
+    at, p = lancer([], texte="", recherche=False)  # rien n'est analysé
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as post:
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert post.call_count == 0  # aucune requête Gemini
+    html = conseil_html(at)
+    assert "PLACÉ CONSEILLÉ" in html and "n° 6 STINGO" in html and "3.1 – 3.9" in html and "10,00" in html
+    suivi = pd.read_csv(tmp_path / "ConseilsPlace.csv", dtype=str, keep_default_na=False)
+    assert len(suivi) == 1 and suivi.iloc[0]["num"] == "6" and suivi.iloc[0]["resultat"] == "En attente"
+
+    # Après la course : réglé au rapport officiel du Placé
+    with mock.patch("requests.get", side_effect=get_course2_terminee), mock.patch("requests.post"):
+        st.cache_data.clear()
+        bouton(at, "Récupérer les arrivées").click().run()
+    assert any("1 conseil(s) Placé réglé(s)" in i for i in textes(at.info)), textes(at.info)
+    suivi = pd.read_csv(tmp_path / "ConseilsPlace.csv", dtype=str, keep_default_na=False)
+    assert suivi.iloc[0]["resultat"] == "Placé" and float(suivi.iloc[0]["gain"]) == pytest.approx(24.0)
+    valeurs = {m.label: m.value for m in at.metric}
+    assert valeurs["Rendement (1 € par conseil)"] == "+240.0 %" and valeurs["Gain fictif"] == "+24.00 €"
+
+
+def test_conseil_place_course_terminee_non_compte(tmp_path):
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=faux_get):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        [sb for sb in at.selectbox if sb.label == "Course"][0].select_index(0).run()  # R1C1, terminée
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert "PLACÉ CONSEILLÉ" in conseil_html(at)
+    assert any("pas compté dans le suivi" in c for c in textes(at.caption))
+
+
+def test_conseil_place_depart_passe_non_compte(tmp_path, monkeypatch):
+    import pmu as module_pmu
+    monkeypatch.setattr(module_pmu, "depart_passe", lambda c, jour, maintenant=None: True)
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=faux_get):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()  # R1C2 « à venir » mais heure passée
+    assert any("déjà partie" in c for c in textes(at.caption))
+    assert not (tmp_path / "ConseilsPlace.csv").exists()
+    assert not (tmp_path / "ConseilsPlace.csv").exists()
+
+
+def test_conseil_place_aussi_avec_analyse_ia():
+    at, p = lancer([http(json_=IA_PMU)], course=1)
+    assert "PLACÉ CONSEILLÉ" in conseil_html(at) and "À JOUER" in verdict(at)
+
+
+def test_pas_de_conseil_place():
+    sans_valeur = {"rapportsParticipant": [{"numPmu": n, "minRapportProbable": 1.1, "maxRapportProbable": 1.2}
+                                           for n in range(1, 8)]}
+
+    def get_sans_valeur(url, **kw):
+        if url.endswith("/rapports/SIMPLE_PLACE"):
+            r = mock.Mock(status_code=200)
+            r.json.return_value = sans_valeur
+            return r
+        return faux_get(url, **kw)
+
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=get_sans_valeur):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert "Pas de Placé intéressant" in conseil_html(at)
