@@ -141,12 +141,34 @@ def connexion_sheets():
         return None, "Connexion au Google Sheet impossible : vérifiez les Secrets."
 
 
+def expliquer_erreur_sheets(erreur):
+    """Traduit une erreur Google Sheets en cause compréhensible (sans jamais afficher de clé)."""
+    nom, texte = type(erreur).__name__, str(erreur)
+    bas = texte.lower()
+    if "has not been used" in bas or "service_disabled" in bas or "is disabled" in bas:
+        return ("Une API Google n'est pas activée : activez **Google Sheets API** et **Google Drive API** "
+                "dans le projet Google Cloud du compte de service.")
+    if nom == "SpreadsheetNotFound" or "not found" in bas or "404" in texte:
+        return ("Classeur introuvable : vérifiez l'adresse `spreadsheet` dans les Secrets, et que le classeur "
+                "est **partagé avec l'adresse du compte de service**.")
+    if "permission" in bas or "403" in texte:
+        return ("Accès refusé : partagez le classeur avec l'adresse `client_email` du compte de service, "
+                "en **Éditeur**.")
+    if "invalid_grant" in bas or "jwt" in bas or "deserialize" in bas or "private key" in bas or "pem" in bas:
+        return ("Clé du compte de service invalide : recopiez `private_key` (avec ses `\\n`) et les autres "
+                "valeurs du fichier JSON dans les Secrets.")
+    if "spreadsheet" in bas and ("must" in bas or "missing" in bas or "required" in bas):
+        return "Adresse du classeur absente : ajoutez `spreadsheet = \"https://docs.google.com/...\"` dans les Secrets."
+    return f"Erreur Google Sheets ({nom}) : {texte[:200]}"
+
+
 class Stockage:
     """Tickets et analyses : dans Google Sheets s'il est configuré, sinon dans des fichiers CSV
     locaux (perdus à chaque redémarrage sur Streamlit Cloud)."""
 
     def __init__(self, conn):
         self.conn = conn
+        self.derniere_erreur = None  # cause lisible de la dernière erreur Google Sheets
         self.dossier = Path(os.environ.get("TURFMASTER_DONNEES", Path(__file__).parent / "donnees_locales"))
 
     @property
@@ -165,7 +187,9 @@ class Stockage:
                                  keep_default_na=False)
             else:
                 df = self.conn.read(worksheet=feuille, ttl=0)
-        except Exception:
+        except Exception as e:
+            if not self.local and type(e).__name__ != "WorksheetNotFound":  # onglet absent = normal au début
+                self.derniere_erreur = expliquer_erreur_sheets(e)
             return pd.DataFrame(columns=colonnes), False
         df = df.dropna(how="all")
         for col in colonnes:
@@ -177,10 +201,15 @@ class Stockage:
         if self.local:
             self.dossier.mkdir(parents=True, exist_ok=True)
             df.to_csv(self.dossier / f"{feuille}.csv", index=False)
-        elif existe:
-            self.conn.update(worksheet=feuille, data=df)
-        else:
-            self.conn.create(worksheet=feuille, data=df)
+            return
+        try:
+            if existe:
+                self.conn.update(worksheet=feuille, data=df)
+            else:
+                self.conn.create(worksheet=feuille, data=df)
+        except Exception as e:
+            self.derniere_erreur = expliquer_erreur_sheets(e)
+            raise
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -468,8 +497,8 @@ with onglet_prono:
                         analyses, existe = stockage.lire(FEUILLE_ANALYSES, mesure.COLONNES_ANALYSES)
                         stockage.ecrire(FEUILLE_ANALYSES, mesure.ajouter_analyse(analyses, ligne), existe)
                     except Exception:
-                        notes.append("Analyse non enregistrée (stockage indisponible) : elle ne comptera pas "
-                                     "dans la mesure de précision.")
+                        notes.append("Analyse non enregistrée : elle ne comptera pas dans la mesure de précision. "
+                                     + (stockage.derniere_erreur or "Stockage indisponible."))
 
                     st.session_state["resultat"] = {
                         "res": res, "decision": decision, "alertes": alertes, "notes": notes, "presse": compil,
@@ -558,12 +587,14 @@ with onglet_prono:
                     r["enregistre"] = True
                     st.rerun()
                 except Exception:
-                    st.error("Impossible d'enregistrer le ticket. Vérifiez le Google Sheet "
-                             "(partagé avec le compte de service ?).")
+                    st.error("Impossible d'enregistrer le ticket. "
+                             + (stockage.derniere_erreur or "Stockage indisponible."))
 
 with onglet_histo:
     if message_sheets:
         st.warning(message_sheets)
+    if stockage.derniere_erreur:
+        st.error(f"❌ Google Sheets : {stockage.derniere_erreur}")
     if stockage.local:
         st.caption("📁 Données enregistrées dans des fichiers sur la machine qui fait tourner l'application. "
                    "Sur Streamlit Cloud, elles sont **perdues à chaque redémarrage** : configurez Google Sheets "
@@ -646,7 +677,7 @@ with onglet_histo:
                 stockage.ecrire(FEUILLE, modifie, existe)
                 st.success("✅ Résultats enregistrés.")
             except Exception:
-                st.error("Impossible d'enregistrer les résultats.")
+                st.error("Impossible d'enregistrer les résultats. " + (stockage.derniere_erreur or ""))
 
 st.divider()
 st.caption("Pari conseillé uniquement si la valeur est mesurable | Programme et arrivées PMU | "
