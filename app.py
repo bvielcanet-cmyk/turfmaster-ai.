@@ -24,8 +24,8 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #000000 !important; font-weight: 800 !important; font-size: 16px !important; }
     [data-testid="stMetricLabel"] { color: #1a1a1a !important; font-weight: 700 !important; font-size: 13px !important; margin-bottom: -8px !important; }
     [data-testid="stMetric"] { background-color: #bdc3c7 !important; padding: 8px 10px !important; border-radius: 8px !important; border: 1px solid #7f8c8d !important; }
-    .stButton>button { background-color: #000000; color: white; border-radius: 12px; font-weight: bold; }
-    .stButton>button:hover, .stButton>button:focus, .stButton>button:active { background-color: #333333; color: white; }
+    .stButton button { background-color: #000000; color: white; border-radius: 12px; font-weight: bold; }
+    .stButton button:hover, .stButton button:focus, .stButton button:active { background-color: #333333; color: white; }
 
     /* Verdict : lisible en thème clair comme sombre (couleurs semi-transparentes) */
     .tm-verdict { border-radius: 14px; padding: 18px 20px; margin: 8px 0 18px; border: 2px solid; }
@@ -38,12 +38,18 @@ st.markdown("""
     .tm-pari-jour { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0 4px;
                     font-size: 1.15rem; font-weight: 700; }
     .tm-pari-jour b { font-size: 2.3rem; white-space: nowrap; }
-    .tm-bord-vert { border-color: #1e9e4a; }
-    .tm-bord-orange { border-color: #d9822b; }
+    .tm-ticket { border-style: dashed; }
+    .tm-ticket .tm-pari-jour { margin-bottom: 0; }
+    .tm-etape { padding: 10px 0; margin-top: 8px; border-top: 1px solid rgba(127, 127, 127, .3); }
+    .tm-cheval-joue { font-size: 1.15rem; font-weight: 800; margin: 4px 0; }
+    .tm-cheval-joue u { text-decoration: none; color: #3b82f6; }
+    .tm-issue { border-radius: 10px; padding: 8px 10px; margin-top: 6px; }
+    .tm-gagne { background: rgba(30, 158, 74, .13); }
+    .tm-perd { background: rgba(220, 38, 38, .11); }
     .tm-quand { font-size: .9rem; }
     .tm-fiabilite { font-weight: 700; font-size: .95rem; margin-top: 2px; }
-    .tm-bord-vert .tm-fiabilite { color: #1e9e4a; }
-    .tm-bord-orange .tm-fiabilite { color: #d9822b; }
+    .tm-texte-vert { color: #1e9e4a; }
+    .tm-texte-orange { color: #d9822b; }
     .tm-mise { font-size: 1rem; }
     .tm-titre-arrivee { display: flex; justify-content: space-between; font-size: .8rem; opacity: .7; margin-top: 12px; }
     .tm-cheval { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
@@ -367,7 +373,10 @@ def recuperer_arrivees(stockage, avec_gemini, maximum_gemini=5):
         if not t["course"] or not t["date_course"]:
             continue  # ancien ticket sans date de course : à compléter à la main
         try:
-            regles += carnet.regler(paris, i, arrivee_pmu(t["date_course"], t["course"]))
+            if t["pari"] in carnet.DOUBLES:
+                regles += carnet.regler_double(paris, i, lambda c: arrivee_pmu(t["date_course"], c))
+            else:
+                regles += carnet.regler(paris, i, arrivee_pmu(t["date_course"], t["course"]))
         except (pmu.PmuErreur, ValueError) as e:
             erreurs.append(str(e))
     if regles:
@@ -447,21 +456,19 @@ def heure_paris():
     return datetime.now(tz=pmu.PARIS).replace(tzinfo=None)
 
 
-def mise_texte(x):
-    return f"💶 Mise conseillée : <b>{x:g}\u00a0€</b> maximum".replace(".", ",")
+def montant_texte(x):
+    return (f"{x:.0f}" if abs(x - round(x)) < .05 else f"{x:.1f}0".replace(".", ",")) + "\u00a0€"
 
 
-def feu_html(ordre, conseil=None):
-    """Une course en un coup d'œil : fiabilité, cheval, un seul pourcentage, mise ou ne pas jouer."""
+def feu_html(ordre, partie=False):
+    """Une course en un coup d'œil : fiabilité, cheval, un seul pourcentage."""
     couleur = decision.feu(ordre)
     if couleur is None:
         return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">⚪ PAS D\'ESTIMATION</div>'
                 '<div class="tm-pourquoi">Il faut au moins 4 partants et la cote de chacun.</div></div>')
     f, favori = decision.FEUX[couleur], ordre.iloc[0]
     classe = {"vert": "tm-oui", "orange": "tm-non", "rouge": "tm-rouge"}[couleur]
-    suite = ""
-    if conseil:
-        suite = mise_texte(conseil["mise"]) if conseil["mise"] else f"✋ <b>Ne pas jouer.</b> {escape(conseil['raison'])}"
+    suite = "✋ <b>Ne pas jouer.</b> Aucun cheval ne se détache." if couleur == "rouge" and not partie else ""
     return f"""<div class="tm-verdict {classe}">
 <div class="tm-titre">{f['emoji']} {f['titre']}</div>
 <div class="tm-pari-jour"><span>🏅 n° {escape(favori['num'])} {escape(favori['nom'])} placé</span>
@@ -485,24 +492,32 @@ def pronostics_html(liste):
         f'<small>{escape(x["chevaux"])}</small></span><b>{pct(x["chance"])}</b></div>' for x in liste)
 
 
-def selection_html(lignes):
-    """Les 3 paris du jour : le strict nécessaire, le reste replié."""
-    cartes = []
-    for x in lignes:
-        f = decision.FEUX[x["feu"]]
-        mise = mise_texte(x["mise"]) if x["mise"] else "✋ <b>Ne pas jouer.</b> Budget ou limite du jour atteints."
-        autres = [p for p in x["pronostics"] if p["code"] != "SIMPLE_PLACE"]
-        plus = (f'<details class="tm-plus"><summary>Autres paris au-dessus de 30 %</summary>{pronostics_html(autres)}'
-                '</details>' if autres else "")
-        cartes.append(
-            f'<div class="tm-carte tm-bord-{x["feu"]}"><div class="tm-quand"><b>{escape(x["heure"])}</b> '
-            f'{escape(x["hippodrome"])} · {escape(x["course"])}</div>'
-            f'<div class="tm-fiabilite">{f["emoji"]} {f["titre"]}</div>'
-            f'<div class="tm-pari-jour"><span>🏅 {escape(x["favori"])} placé</span><b>{pct(x["place"])}</b></div>'
-            f'<div class="tm-mise">{mise}</div>'
-            f'<div class="tm-titre-arrivee"><span>🏁 Arrivée estimée</span><span>chances d\'être placé</span></div>'
-            f'{arrivee_html(x["arrivee"][:3])}{plus}</div>')
-    return "".join(cartes)
+def ticket_html(t, maintenant):
+    """Le ticket du one-shot : quoi jouer, quand, et les deux seules issues."""
+    mode, etapes = decision.MODES[t["cle"]], []
+    pari = "PLACÉ" if mode["pari"] == "PLACE" else "GAGNANT"
+    for k, e in enumerate(t["etapes"]):
+        x, f = e["course"], decision.FEUX[e["course"]["feu"]]
+        dans = decision.minutes_avant(x["heure"], maintenant)
+        quand = f" · dans {dans} min" if 0 <= dans < 60 else ""
+        if k == 0:
+            mise = f'💶 Mets <b>{montant_texte(t["montant"])}</b> en Simple {pari.capitalize()}'
+        else:
+            combien = f' (environ {montant_texte(e["mise"])})' if e["mise"] else ""
+            mise = f'🔁 Si le 1er passe, <b>rejoue tout ce qu\'il a rapporté</b>{combien}'
+        numero = f"{k + 1}. " if len(t["etapes"]) > 1 else ""
+        etapes.append(
+            f'<div class="tm-etape"><div class="tm-quand">{numero}<b>{escape(x["heure"])}</b> '
+            f'{escape(x["hippodrome"])} · {escape(x["course"])}{quand}</div>'
+            f'<div class="tm-fiabilite tm-texte-{x["feu"]}">{f["emoji"]} {f["titre"]}</div>'
+            f'<div class="tm-cheval-joue">🐎 n° {escape(x["num"])} {escape(x["nom"])} <u>{pari}</u></div>'
+            f'<div class="tm-mise">{mise}</div></div>')
+    tout = "les deux passent" if len(etapes) > 1 else "ça passe"
+    return (f'<div class="tm-carte tm-ticket"><div class="tm-pari-jour"><span>🎟️ {mode["nom"]}</span>'
+            f'<b>{pct(t["chance"])}</b></div><div class="tm-sous">de chances que ça passe</div>'
+            f'{"".join(etapes)}'
+            f'<div class="tm-issue tm-gagne">🎉 Si {tout} : tu gagnes environ <b>+{montant_texte(t["gain"])}</b></div>'
+            f'<div class="tm-issue tm-perd">💸 Sinon : tu perds <b>tes {montant_texte(t["montant"])}</b></div></div>')
 
 
 def jour_html(lignes):
@@ -529,11 +544,11 @@ def risque_html(r):
 
 # --- 3. INTERFACE ---
 st.title("🚦 TurfMaster")
-st.markdown("**Aide à la décision**")
-st.caption("🎲 Aucun pari testé n'est rentable. Ne misez que ce que vous acceptez de perdre.")
+st.markdown("**Un one-shot pour s'amuser, sur une ou deux courses**")
+st.caption("🎲 Aucun pari testé n'est rentable. Ne mise que ce que tu acceptes de perdre.")
 
 with st.sidebar:
-    budget_semaine = st.number_input("💶 Mon budget maximum sur 7 jours (€)", value=20, min_value=0,
+    budget_semaine = st.number_input("💶 Mon budget maximum sur 7 jours (€)", value=50, min_value=0,
                                      help="Tout ce qui est misé compte : un gain n'agrandit pas le budget.")
     st.divider()
     choix_discipline = st.selectbox("Discipline", [AUTO] + tl.DISCIPLINES)
@@ -556,7 +571,7 @@ with st.sidebar:
         st.caption(f"Déjà misé sur 7 jours : **{euros(deja_mise)}** sur {euros(budget_semaine)}.")
 
 # La clé garde l'onglet ouvert quand la page se recharge (après un clic sur un bouton)
-onglet_jour, onglet_course, onglet_carnet = st.tabs(["🚦 Classement", "🏇 La course", "📒 Mon carnet"],
+onglet_jour, onglet_course, onglet_carnet = st.tabs(["🎯 One-shot", "🏇 La course", "📒 Mon carnet"],
                                                     key="onglet")
 
 with onglet_course:
@@ -577,7 +592,7 @@ with onglet_course:
         hippo_input, txt_in = course_pmu["hippodrome"] if course_pmu else "", ""
     else:
         hippo_input = st.text_input("Hippodrome", value="Vincennes")
-        txt_in = st.text_area("Collez les partants copiés depuis un site (avec les cotes), ou un cheval par ligne "
+        txt_in = st.text_area("Colle les partants copiés depuis un site (avec les cotes), ou un cheval par ligne "
                               "(ex: 12 FAKIR D4 1a 2a 4.5)", height=200)
         if txt_in.strip():
             df, lignes_ignorees = tl.extraire_data_pro(txt_in)
@@ -592,11 +607,7 @@ with onglet_course:
         if terminee:
             st.caption("⏱️ Course déjà partie : ces cotes sont celles de la clôture, inconnues au moment de parier.")
         offerts = course_pmu.get("paris") if course_pmu else None
-        conseil = None
-        if not ordre.empty and not terminee:
-            conseil = decision.conseiller(ordre, budget_semaine, deja_mise,
-                                          paris_du_jour if jour == pmu.aujourd_hui() else 0, offerts)
-        st.markdown(feu_html(ordre, conseil), unsafe_allow_html=True)
+        st.markdown(feu_html(ordre, terminee), unsafe_allow_html=True)
 
     if not ordre.empty:
         st.markdown('<div class="tm-titre-arrivee"><span>🏁 Arrivée estimée</span><span>chances d\'être placé</span></div>'
@@ -638,7 +649,7 @@ with onglet_course:
                     st.caption(f"💸 Environ {pct(1 - chance)} de risque de perdre {euros(mise)}. "
                                "Cote du Placé inconnue : gain possible non chiffrable.")
                 if deja_mise + mise > budget_semaine:
-                    st.warning(f"🛑 Avec ce pari, vous dépassez votre budget de {euros(budget_semaine)} sur 7 jours.")
+                    st.warning(f"🛑 Avec ce pari, tu dépasses ton budget de {euros(budget_semaine)} sur 7 jours.")
                 if course_pmu and st.button("📒 J'ai joué ce pari : le noter dans mon carnet"):
                     try:
                         nouveau = carnet.ligne(heure_paris().strftime("%Y-%m-%d %H:%M"), pmu.date_pmu(jour),
@@ -651,7 +662,7 @@ with onglet_course:
                     except Exception:
                         st.error("Impossible de noter ce pari. " + (stockage.derniere_erreur or ""))
         if st.session_state.pop("pari_note", False):
-            st.success("📒 Pari noté dans votre carnet.")
+            st.success("📒 Pari noté dans ton carnet.")
 
         with st.expander("🃏 Et les autres types de paris ?"):
             st.markdown(decision.AUTRES_PARIS)
@@ -660,7 +671,7 @@ with onglet_course:
                  help="Jusqu'à 3 requêtes Gemini. Un avis en plus : l'IA n'a pas montré qu'elle fait mieux que les cotes."):
         st.session_state.pop("resultat", None)
         if df.empty:
-            st.error("Choisissez une course du programme, ou collez des partants (ex: 12 NOM).")
+            st.error("Choisis une course du programme, ou colle des partants (ex: 12 NOM).")
         else:
             notes = []
             detectee = (course_pmu["discipline"] if course_pmu and course_pmu["discipline"] != "Non précisée"
@@ -671,7 +682,7 @@ with onglet_course:
                 discipline = choix_discipline
                 if detectee and detectee != discipline:
                     notes.append(f"La musique des chevaux indique plutôt **{detectee}** "
-                                 f"alors que vous avez choisi **{discipline}**.")
+                                 f"alors que tu as choisi **{discipline}**.")
             partants_str = "\n".join(f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows())
 
             with st.spinner("🤖 Recherches et analyse de la course..."):
@@ -756,42 +767,126 @@ with onglet_course:
                                "(risque d'invention).")
 
 with onglet_jour:
-    st.caption("  \n".join(f"{f['emoji']} **{f['titre']}** ({f['sur10']} favoris placés sur 10)"
-                           for f in decision.FEUX.values()))
-    if st.button("🔎 EXPLORER LES COURSES DU JOUR (gratuit)", width="stretch"):
-        try:
-            with st.spinner("🐎 Lecture de toutes les courses (environ 30 secondes)..."):
-                st.session_state["feux"] = {
-                    "jour": pmu.aujourd_hui(), "heure": heure_paris().strftime("%H:%M"),
-                    "lignes": decision.cribler(pmu.aujourd_hui(), datetime.now(tz=pmu.PARIS),
-                                               programme_pmu(pmu.aujourd_hui()), partants_pmu)}
-        except pmu.PmuErreur as e:
-            st.error(f"❌ {e}")
-    feux = st.session_state.get("feux")
-    if feux:
-        # une liste gardée à l'écran ne doit pas conseiller une course déjà partie
-        restantes = [x for x in feux["lignes"] if not pmu.depart_passe(x, feux["jour"])]
-        if restantes:
-            classees = decision.repartir(restantes, budget_semaine, deja_mise, paris_du_jour)
-            choisies = decision.selectionner(classees)
-            st.markdown("### 🏆 Les 3 paris du jour")
-            if choisies:
-                st.caption("Les plus probables, **pas rentables** : pour 10 € joués, "
-                           f"{euros(decision.REPERE_SELECTION['perte'] * 10)} perdus en moyenne. "
-                           f"Cotes de {feux['heure']}, à actualiser avant le départ.")
-                st.markdown(selection_html(choisies), unsafe_allow_html=True)
-                if len(choisies) < decision.NB_SELECTION:
-                    st.caption("Je ne complète pas avec une course 🔴.")
+    montant = st.radio("💶 Je mets", decision.MONTANTS, horizontal=True, format_func=montant_texte)
+    reste = max(budget_semaine - deja_mise, 0)
+    st.caption(f"Budget des 7 jours : il reste **{montant_texte(reste)}** sur {montant_texte(budget_semaine)}.")
+
+    if st.session_state.pop("oneshot_note", False):
+        st.success("📒 One-shot noté. Bonne course !")
+    if paris_du_jour:
+        st.markdown("### 🏁 C'est joué pour aujourd'hui")
+        st.caption("Un one-shot, c'est une fois. Le résultat t'attend dans 📒 Mon carnet, "
+                   "avec « Récupérer les arrivées ».")
+    elif montant > reste:
+        st.warning(f"🛑 {montant_texte(montant)} dépasse ce qu'il reste de ton budget des 7 jours. "
+                   "Choisis moins, ou garde-le pour une autre fois.")
+    else:
+        feux = st.session_state.get("feux")
+        if st.button("🔄 ACTUALISER LES COURSES" if feux else "🔎 TROUVER MON ONE-SHOT", width="stretch",
+                     help="Gratuit. Lit toutes les courses françaises encore à venir (environ 30 secondes)."):
+            try:
+                with st.spinner("🐎 Je regarde toutes les courses (environ 30 secondes)..."):
+                    partants_pmu.clear()
+                    cotes_place_pmu.clear()
+                    feux = {"jour": pmu.aujourd_hui(), "heure": heure_paris().strftime("%H:%M"),
+                            "lignes": decision.cribler(pmu.aujourd_hui(), datetime.now(tz=pmu.PARIS),
+                                                       programme_pmu(pmu.aujourd_hui()), partants_pmu)}
+                    st.session_state["feux"] = feux
+                    st.rerun()
+            except pmu.PmuErreur as e:
+                st.error(f"❌ {e}")
+
+        if feux:
+            # une liste gardée à l'écran ne doit pas conseiller une course déjà partie
+            restantes = [x for x in feux["lignes"] if not pmu.depart_passe(x, feux["jour"])]
+            possibles = decision.jouables(restantes, "tranquille")
+            if not possibles:
+                st.markdown("✋ **Ne pas jouer** : aucune course assez fiable parmi celles qui restent.")
             else:
-                st.markdown("✋ **Ne pas jouer** : aucune estimation assez fiable parmi les courses restantes.")
-            ids = {x["course"] for x in choisies}
-            autres = [x for x in classees if x["course"] not in ids]
-            if autres:
-                with st.expander(f"📋 Voir les {len(autres)} autres courses"):
-                    st.caption("Chances du favori d'être placé. Aucune mise conseillée sur ces courses.")
-                    st.markdown(jour_html(autres), unsafe_allow_html=True)
-        else:
-            st.caption("Plus aucune course française à venir aujourd'hui.")
+                noms_courses = {x["course"]: f"{x['heure']} {x['hippodrome']} · {x['course']}" for x in possibles}
+                cle_voulue = st.session_state.get("course_voulue")
+                if cle_voulue and cle_voulue not in noms_courses:
+                    del st.session_state["course_voulue"]  # elle est partie ou devenue trop ouverte
+                zone_modes, zone_ticket = st.container(), st.container()
+                voulue = st.selectbox(
+                    "🐎 Ou je choisis ma course", list(noms_courses), index=None, key="course_voulue",
+                    placeholder="La meilleure est choisie pour toi", format_func=lambda c: noms_courses.get(c, c))
+
+                def cote_de(x, mode):
+                    if mode["pari"] == "GAGNANT":
+                        return x["cote"]
+                    try:
+                        fourchette = cotes_place_pmu(feux["jour"], x["reunion"], x["numero"]).get(x["num"])
+                    except pmu.PmuErreur:
+                        return None
+                    return fourchette[0] if fourchette else None
+
+                tickets = {}
+                for cle, mode in decision.MODES.items():
+                    choisies = decision.choisir_courses(restantes, cle, voulue)
+                    if choisies:
+                        tickets[cle] = decision.ticket(cle, choisies, montant, [cote_de(x, mode) for x in choisies])
+
+                if not tickets:
+                    st.markdown("✋ **Ne pas jouer** cette course : le pari n'y est pas proposé.")
+                else:
+                    with zone_modes:
+                        if st.session_state.get("facon") not in tickets:
+                            st.session_state.pop("facon", None)
+                        facon = st.radio(
+                            "🎲 Je joue comment ?", list(tickets), key="facon",
+                            format_func=lambda c: f"{decision.MODES[c]['nom']} : {decision.MODES[c]['quoi']}",
+                            captions=[f"{pct(t['chance'])} de chances · +{montant_texte(t['gain'])} environ"
+                                      for t in tickets.values()])
+                        if len(tickets) < len(decision.MODES):
+                            st.caption("Pas de deuxième course assez fiable pour enchaîner.")
+                    with zone_ticket:
+                        t, mode = tickets[facon], decision.MODES[facon]
+                        maintenant = heure_paris()
+                        st.markdown(ticket_html(t, maintenant), unsafe_allow_html=True)
+                        if t["gain"] < decision.PETIT_GAIN * montant:
+                            st.warning(f"🤏 **Très petit gain** : +{montant_texte(t['gain'])} pour "
+                                       f"{montant_texte(montant)} risqués. Ça n'en vaut sans doute pas la peine : "
+                                       "choisis une autre course, ou passe.")
+                        depart = t["etapes"][0]["course"]["heure"]
+                        if decision.minutes_avant(depart, maintenant) > decision.ACTUALISER_AVANT:
+                            rappel = (pd.Timestamp(f"{feux['jour']} {depart}") - pd.Timedelta(minutes=10)).strftime("%H:%M")
+                            st.info(f"⏰ **Provisoire.** Reviens vers **{rappel}** et actualise avant de jouer : "
+                                    "c'est là que l'estimation est la plus juste.")
+                        st.caption(f"Cotes de {feux['heure']}. Pour s'amuser, pas pour gagner à la longue.")
+                        if st.button("📒 C'est joué, note-le", width="stretch"):
+                            try:
+                                etapes = [e["course"] for e in t["etapes"]]
+                                nouveau = carnet.ligne(
+                                    heure_paris().strftime("%Y-%m-%d %H:%M"), pmu.date_pmu(feux["jour"]),
+                                    carnet.SUITE.join(x["course"] for x in etapes),
+                                    carnet.SUITE.join(x["hippodrome"] for x in etapes), "", mode["carnet"],
+                                    carnet.SUITE.join(x["num"] for x in etapes), t["etapes"][0]["cote"] or 0.0,
+                                    montant)
+                                stockage.ecrire(FEUILLE, pd.concat([paris_notes, pd.DataFrame([nouveau])],
+                                                                   ignore_index=True), paris_existe)
+                                st.session_state["oneshot_note"] = True
+                                st.rerun()
+                            except Exception:
+                                st.error("Impossible de noter ce pari. " + (stockage.derniere_erreur or ""))
+                        with st.expander("🏁 Arrivée estimée"):
+                            for e in t["etapes"]:
+                                x = e["course"]
+                                st.markdown(
+                                    f'<div class="tm-titre-arrivee"><span>{escape(x["heure"])} '
+                                    f'{escape(x["hippodrome"])}</span><span>chances d\'être placé</span></div>'
+                                    + arrivee_html(x["arrivee"][:5]), unsafe_allow_html=True)
+                                autres_paris = [p for p in x["pronostics"]
+                                                if p["code"] not in ("SIMPLE_PLACE", "SIMPLE_GAGNANT")]
+                                if autres_paris:
+                                    st.caption("Autres paris au-dessus de 30 %")
+                                    st.markdown(pronostics_html(autres_paris), unsafe_allow_html=True)
+            if restantes:
+                with st.expander(f"📋 Voir les {len(restantes)} courses à venir"):
+                    st.caption("  \n".join(f"{f['emoji']} **{f['titre']}** ({f['sur10']} favoris placés sur 10)"
+                                           for f in decision.FEUX.values()))
+                    st.caption("À droite : chances du favori d'être placé.")
+                    st.markdown(jour_html(restantes), unsafe_allow_html=True)
 
 with onglet_carnet:
     if message_sheets:
@@ -868,4 +963,4 @@ with onglet_carnet:
         st.info(st.session_state.pop("compte_rendu_test"))
 
 st.divider()
-st.caption("🚦 Le feu note l'estimation, pas le gain · 📒 le carnet dit la vérité")
+st.caption("🎯 Un one-shot, une fois · 🚦 le feu note l'estimation, pas le gain")

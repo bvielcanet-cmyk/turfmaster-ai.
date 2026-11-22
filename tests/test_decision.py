@@ -40,21 +40,6 @@ def test_risque_jamais_presente_comme_un_avantage():
     assert decision.risque_pari(.5, 3.0, 10)["cout_moyen"] is None
 
 
-@pytest.mark.parametrize("couleur, budget, deja, nombre, mise", [
-    ("vert", 20, 0, 0, 2), ("vert", 60, 0, 0, 6), ("orange", 100, 0, 0, 5), ("vert", 5000, 0, 0, 10),
-    ("rouge", 100, 0, 0, 0), ("vert", 20, 19, 0, 0), ("vert", 60, 56.7, 0, 3), ("vert", 60, 0, 3, 0),
-])
-def test_mise_conseillee(couleur, budget, deja, nombre, mise):
-    assert decision.mise_conseillee(couleur, budget, deja, nombre) == mise
-
-
-@pytest.mark.parametrize("budget", range(0, 130, 7))
-def test_repartition_dans_le_budget(budget):
-    lignes = [{"feu": f, "offerts": []} for f in ("vert", "rouge", "orange", "vert", "vert", "orange")]
-    mises = [x["mise"] for x in decision.repartir(lignes, budget, 4)]
-    assert sum(mises) <= max(budget - 4, 0) and sum(m > 0 for m in mises) <= 3 and mises[1] == 0
-
-
 def test_chance_selection_egale_au_podium():
     p = decision.ordre_estime(course(2, 3, 5, 8, 10, 12, 15, 20, 30, 40))["victoire"]
     issues = decision.podiums(p, 3)
@@ -79,25 +64,6 @@ def test_favori_corrige_vers_le_bas():
     assert gagne < o.iloc[0]["victoire"] and place < o.iloc[0]["place"]
 
 
-def test_conseil():
-    claire = decision.ordre_estime(course(1.4, 8, 9, 12, 20))
-    c = decision.conseiller(claire, 20, 0)
-    assert c["num"] == "1" and c["mise"] == 2 and c["cout"] > 0
-    assert decision.conseiller(claire, 20, 0, offerts=["SIMPLE_GAGNANT"])["mise"] == 0
-    ouverte = decision.ordre_estime(course(5, 5, 5, 5, 5))
-    assert decision.conseiller(ouverte, 100, 0)["mise"] == 0
-
-
-def test_selection_trois_courses_jamais_une_rouge():
-    lignes = [{"feu": f, "offerts": o, "id": i} for i, (f, o) in enumerate(
-        [("vert", []), ("rouge", []), ("vert", ["SIMPLE_GAGNANT"]), ("orange", []), ("vert", []), ("vert", [])])]
-    assert [x["id"] for x in decision.selectionner(lignes)] == [0, 3, 4]
-    assert decision.selectionner(lignes[1:3]) == []
-    # la mise va bien aux trois courses affichées
-    reparties = decision.repartir(lignes, 100, 0)
-    assert [x["id"] for x in reparties if x["mise"]] == [x["id"] for x in decision.selectionner(reparties)]
-
-
 def test_plafond_des_grands_favoris():
     o = decision.ordre_estime(course(1.1, 2.2, 25, 30, 40, 50, 60, 80))
     vu = decision.chances_affichees(o)
@@ -120,6 +86,36 @@ def test_classement_sans_ex_aequo_du_plafond():
 def test_les_chances_affichees_font_100():
     vu = decision.chances_affichees(decision.ordre_estime(course(1.1, 9, 10, 11)))
     assert vu["victoire"].sum() == pytest.approx(1) and vu["place"].sum() == pytest.approx(2)
+
+
+def ligne(ident, heure, brut, feu="vert", offerts=(), cote=2.0):
+    return {"course": ident, "cote": cote, "heure": heure, "brut": brut, "feu": feu, "offerts": list(offerts),
+            "place": brut, "victoire": brut / 2}
+
+
+def test_choix_du_one_shot():
+    lignes = [ligne("A", "14:00", .70), ligne("B", "14:10", .72), ligne("C", "15:00", .60),
+              ligne("R", "16:00", .90, "rouge"), ligne("G", "17:00", .80, offerts=["SIMPLE_GAGNANT"])]
+    ids = lambda *a: [x["course"] for x in decision.choisir_courses(lignes, *a)]
+    assert ids("tranquille") == ["B"]  # ni la rouge, ni celle sans Simple Placé
+    assert ids("tranquille", "C") == ["C"]
+    assert ids("double") == ["B", "C"]  # A et B sont trop proches pour rejouer les gains
+    assert ids("double", "A") == ["A", "C"]
+    assert ids("gros") == ["G"]
+    assert ids("tranquille", "R") == []
+    assert decision.choisir_courses(lignes[:2], "double") == []
+    assert decision.choisir_courses([ligne("P", "14:00", .9, cote=1.1)], "tranquille") == []  # rien à gagner
+
+
+def test_ticket():
+    a, b = ligne("A", "14:00", .7), ligne("B", "15:00", .6)
+    t = decision.ticket("double", [a, b], 50, [1.2, 1.5])
+    assert t["chance"] == pytest.approx(.42) and t["gain"] == pytest.approx(40) and not t["habituel"]
+    assert [e["mise"] for e in t["etapes"]] == pytest.approx([50, 60])
+    t = decision.ticket("tranquille", [a], 20, [None])
+    assert t["habituel"] and t["gain"] == pytest.approx(6) and t["montant"] == 20
+    assert decision.ticket("gros", [a], 20, [3.0])["chance"] == pytest.approx(.35)
+    assert decision.ticket("double", [a], 20, [1.2]) is None
 
 
 def test_cribler():

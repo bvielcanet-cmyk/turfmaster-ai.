@@ -1,7 +1,7 @@
 """Aide à la décision : lisibilité d'une course, pronostics chiffrés, conseil et risque d'un pari.
 
-Le conseil désigne le pari le PLUS PROBABLE, jamais un pari rentable : aucun ne l'est de façon fiable.
-La mise conseillée est un plafond tiré du budget. Les cotes résument l'avis de tous les parieurs.
+L'application sert à jouer ponctuellement un « one-shot » sur une ou deux courses. Le conseil désigne le
+pari le plus probable pour le niveau de risque choisi, jamais un pari rentable : aucun ne l'est de façon fiable.
 
 Règle pour toute étude future : une cote utilisée pour CHOISIR un pari doit être horodatée avant le
 départ. Les cotes que le PMU renvoie pour une course terminée (dernierRapportDirect, cotes probables)
@@ -56,12 +56,24 @@ SEUIL_PRONOSTIC = 0.30
 # Au-delà, le calcul promet plus que la réalité : favori annoncé à 75 % ou plus placé 76 % du temps
 # (69 % en novembre), annoncé à 50 % ou plus gagnant 51 % du temps. On n'affiche donc jamais davantage.
 PLAFOND_GAGNE, PLAFOND_PLACE = 0.50, 0.75
-NB_SELECTION = 3
-# Les 3 favoris placés les plus sûrs de chaque jour, hors courses rouges (60 jours, 180 paris)
-REPERE_SELECTION = {"place": 0.761, "place_novembre": 0.700, "perte": 0.030, "trois_passent": 0.383}
-MISE_MINI, MISE_MAXI, PARIS_PAR_JOUR = 2.0, 10.0, 3  # 2 € = mise de base du Simple en point de vente
-PART_BUDGET = {"vert": 0.10, "orange": 0.05, "rouge": 0.0}  # par pari, du budget de 7 jours
-PERTE_PLACE = {"vert": 0.061, "orange": 0.062, "rouge": 0.216}  # favori placé, perte moyenne mesurée
+MONTANTS = [20, 50]  # un one-shot
+COTE_MINI = 1.5  # favori moins payé : presque rien à gagner, pour un risque de tout perdre
+ECART_DOUBLE = 20  # minutes entre les deux courses d'un doublé : le temps d'être payé et de rejouer
+PETIT_GAIN = 0.10  # en dessous, le gain ne vaut pas le risque de tout perdre : on le signale
+ACTUALISER_AVANT = 15  # minutes : avant cela, l'estimation est provisoire
+
+# Façons de jouer un one-shot. Mesurées du 22/09 au 20/11/2026 sur les 3 courses les plus sûres de chaque
+# jour : « gagne » = part des cas finis en gain, « gain » = gain médian quand ça passe, « net » = moyenne.
+MODES = {
+    "tranquille": {"nom": "🛡️ Tranquille", "pari": "PLACE", "courses": 1, "carnet": "Simple Placé",
+                   "quoi": "1 cheval placé", "gagne": .728, "gain": .30, "net": -.046},
+    "gros": {"nom": "🚀 Gros coup", "pari": "GAGNANT", "courses": 1, "carnet": "Simple Gagnant",
+             "quoi": "1 cheval gagnant", "gagne": .444, "gain": 1.00, "net": -.072},
+    "double": {"nom": "🎢 Doublé", "pari": "PLACE", "courses": 2, "carnet": "Doublé Placé",
+               "quoi": "2 placés à la suite", "gagne": .545, "gain": .68, "net": -.078},
+    "jackpot": {"nom": "💥 Jackpot", "pari": "GAGNANT", "courses": 2, "carnet": "Doublé Gagnant",
+                "quoi": "2 gagnants à la suite", "gagne": .224, "gain": 3.20, "net": -.011},
+}
 
 # Pronostic par type de pari, toujours sur les chevaux les moins cotés.
 # k chevaux choisis, rangs visés (None : places payées). « correction » : (a, b) de a + b·logit(p), apprise
@@ -197,51 +209,55 @@ def pronostics(ordre, offerts=None):
     return sorted(resultat, key=lambda x: x["chance"], reverse=True)
 
 
-def mise_conseillee(couleur, budget, deja_mise, paris_du_jour=0):
-    """Plafond conseillé pour un pari. 0 : passer (course rouge, budget épuisé, 3 paris déjà faits)."""
-    part, reste = PART_BUDGET.get(couleur, 0.0), budget - deja_mise
-    if not part or reste < MISE_MINI or paris_du_jour >= PARIS_PAR_JOUR:
-        return 0.0
-    return float(np.floor(min(max(budget * part, MISE_MINI), MISE_MAXI, reste) * 2) / 2)
+def _minutes(heure):
+    h, m = heure.split(":")
+    return int(h) * 60 + int(m)
 
 
-def conseiller(ordre, budget, deja_mise, paris_du_jour=0, offerts=None):
-    """Le conseil d'une course : le favori en Simple Placé, ou passer."""
-    couleur = feu(ordre)
-    if couleur is None:
+def minutes_avant(heure, maintenant):
+    return _minutes(heure) - (maintenant.hour * 60 + maintenant.minute)
+
+
+def jouables(lignes, cle):
+    """Courses où ce one-shot peut se jouer : jamais une rouge, favori coté au moins 1,5, pari proposé.
+    De la plus sûre à la moins sûre."""
+    code = "SIMPLE_PLACE" if MODES[cle]["pari"] == "PLACE" else "SIMPLE_GAGNANT"
+    return sorted([x for x in lignes if x["feu"] != "rouge" and x["heure"] != "?" and x["cote"] >= COTE_MINI
+                   and (not x["offerts"] or code in x["offerts"])], key=lambda x: x["brut"], reverse=True)
+
+
+def choisir_courses(lignes, cle, voulue=None):
+    """La ou les courses du one-shot, dans l'ordre de départ. [] si ce mode est impossible.
+
+    Même choix pour tous les modes : le favori qui a le plus de chances d'être placé. Pour deux courses,
+    la paire la plus sûre avec le temps de rejouer les gains entre les deux."""
+    possibles = jouables(lignes, cle)
+    if MODES[cle]["courses"] == 1:
+        return next(([x] for x in possibles if voulue in (None, x["course"])), [])
+    paires = [(a, b) for a, b in itertools.combinations(possibles, 2)
+              if abs(_minutes(a["heure"]) - _minutes(b["heure"])) >= ECART_DOUBLE
+              and voulue in (None, a["course"], b["course"])]
+    if not paires:
+        return []
+    return sorted(max(paires, key=lambda ab: ab[0]["brut"] * ab[1]["brut"]), key=lambda x: _minutes(x["heure"]))
+
+
+def ticket(cle, courses, montant, cotes):
+    """Le ticket : chances que tout passe, étapes, et gain si ça passe.
+
+    cotes : une par course, None si inconnue. Le gain habituel de ce mode sert alors de repère."""
+    mode = MODES[cle]
+    if len(courses) != mode["courses"]:
         return None
-    mise, raison = 0.0, ""
-    if offerts and "SIMPLE_PLACE" not in offerts:
-        raison = "Le Simple Placé n'est pas proposé sur cette course."
-    elif couleur == "rouge":
-        raison = "Aucun cheval ne se détache."
-    elif paris_du_jour >= PARIS_PAR_JOUR:
-        raison = f"Déjà {PARIS_PAR_JOUR} paris aujourd'hui."
-    else:
-        mise = mise_conseillee(couleur, budget, deja_mise)
-        if not mise:
-            raison = "Budget de la semaine atteint."
-    return {"num": ordre.iloc[0]["num"], "nom": ordre.iloc[0]["nom"], "chance": chances_favori(ordre)[1],
-            "mise": mise, "cout": mise * PERTE_PLACE[couleur], "raison": raison}
-
-
-def repartir(lignes, budget, deja_mise, paris_du_jour=0):
-    """Ajoute une mise conseillée aux courses les mieux classées, dans le budget et 3 paris par jour."""
-    resultat, total, nombre = [], deja_mise, paris_du_jour
-    for x in lignes:
-        permis = not x["offerts"] or "SIMPLE_PLACE" in x["offerts"]
-        mise = mise_conseillee(x["feu"], budget, total, nombre) if permis else 0.0
-        if mise:
-            total, nombre = total + mise, nombre + 1
-        resultat.append({**x, "mise": mise, "cout": mise * PERTE_PLACE[x["feu"]]})
-    return resultat
-
-
-def selectionner(lignes):
-    """Les 3 courses du jour où le favori a le plus de chances d'être placé (jamais une course rouge).
-    Ce sont les paris les plus sûrs, pas les plus rentables."""
-    possibles = [x for x in lignes if x["feu"] != "rouge" and (not x["offerts"] or "SIMPLE_PLACE" in x["offerts"])]
-    return possibles[:NB_SELECTION]
+    chance, etapes, en_jeu = 1.0, [], float(montant)
+    for x, cote in zip(courses, cotes):
+        chance *= x["place"] if mode["pari"] == "PLACE" else x["victoire"]
+        etapes.append({"course": x, "mise": en_jeu, "cote": cote})
+        en_jeu = en_jeu * cote if en_jeu is not None and cote and cote > 1 else None
+    habituel = en_jeu is None
+    gain = montant * mode["gain"] if habituel else en_jeu - montant
+    return {"cle": cle, "chance": chance, "etapes": etapes, "montant": float(montant), "gain": float(gain),
+            "habituel": habituel}
 
 
 def chances_trio(ordre):
@@ -279,7 +295,9 @@ def cribler(jour, maintenant, programme, lire_partants):
             lignes.append({"course": c["id"], "brut": float(f["place"]), "trio": chances_trio(ordre),
                            "arrivee": chances_affichees(ordre).head(5).to_dict("records"),
                            "places_payees": nombre_places(len(ordre)), "libelle": c.get("libelle", ""), "heure": c["heure"], "hippodrome": c["hippodrome"], "feu": couleur,
-                           "favori": f"n° {f['num']} {f['nom']}", "victoire": gagne, "place": place,
+                           "favori": f"n° {f['num']} {f['nom']}",
+                           "num": str(f["num"]), "nom": f["nom"], "cote": float(f["cote"]),
+                           "reunion": c["reunion"], "numero": c["course"], "victoire": gagne, "place": place,
                            "partants": len(ordre), "offerts": c.get("paris") or [],
                            "pronostics": pronostics(ordre, c.get("paris"))})
     return sorted(lignes, key=lambda x: x["brut"], reverse=True)  # le plafond créerait des ex aequo

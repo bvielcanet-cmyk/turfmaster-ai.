@@ -32,6 +32,25 @@ def test_jamais_de_gain_estime(arr):
     assert not carnet.regler(df, 0, arr) and df.at[0, "resultat"] == "En attente"
 
 
+@pytest.mark.parametrize("premiere, seconde, resultat, rendu", [
+    (arrivee(), arrivee(), "Gagné", 86),
+    (arrivee(rapports_place={"9": 2.0}), None, "Perdu", 0),
+    (arrivee(non_partants=["5"]), arrivee(), "Gagné", 20),
+    (arrivee(annulee=True), arrivee(annulee=True), "Remboursé", 10),
+    (arrivee(), arrivee(terminee=False), "En attente", 0),
+])
+def test_regler_un_double(premiere, seconde, resultat, rendu):
+    df = pd.DataFrame([carnet.ligne("2026-11-21 12:00", "21112026", "R1C1 > R1C4", "A > A", "", "Doublé Placé",
+                                    "5 > 1", 1.2, 10)])
+    lues = {"R1C1": premiere, "R1C4": seconde}
+
+    def lire(course):
+        assert lues[course] is not None, "la 2e course ne doit pas être lue si la 1re est perdue"
+        return lues[course]
+    assert carnet.regler_double(df, 0, lire) == (resultat != "En attente")
+    assert df.at[0, "resultat"] == resultat and df.at[0, "gain_reel"] == pytest.approx(rendu)
+
+
 def test_budget_un_gain_ne_l_agrandit_pas():
     t = pd.concat([paris()] * 4, ignore_index=True)
     t["resultat"] = ["Gagné", "Perdu", "Remboursé", "En attente"]

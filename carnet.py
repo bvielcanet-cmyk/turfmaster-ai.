@@ -7,6 +7,8 @@ import mesure
 EN_ATTENTE, GAGNE, PERDU, REMBOURSE = "En attente", "Gagné", "Perdu", "Remboursé"
 RESULTATS = [EN_ATTENTE, GAGNE, PERDU, REMBOURSE]
 # Mêmes premières colonnes que l'ancien onglet « TurfMaster » : les tickets existants restent lisibles
+DOUBLES = {"Doublé Placé": "rapports_place", "Doublé Gagnant": "rapports_gagnant"}
+SUITE = " > "  # sépare les deux courses, et les deux chevaux, d'un doublé
 COLONNES = ["date", "hippodrome", "discipline", "profil", "pari", "chevaux", "cote", "proba_ia", "gain_espere",
             "mise", "resultat", "gain_reel", "course", "analyse", "source_gain", "date_course"]
 
@@ -35,6 +37,34 @@ def regler(df, i, arrivee):
         resultat, rapporte = (GAGNE, round(mise * rapport, 2)) if rapport else (PERDU, 0.0)
         source = "rapport officiel PMU"
     df.at[i, "resultat"], df.at[i, "gain_reel"], df.at[i, "source_gain"] = resultat, rapporte, source
+    return True
+
+
+def regler_double(df, i, lire_arrivee):
+    """Règle un doublé, où tous les gains de la 1re course sont rejoués sur la 2e. Une course remboursée
+    laisse la somme intacte. La 2e arrivée n'est pas lue si la 1re est perdue."""
+    t = df.loc[i]
+    if t["pari"] not in DOUBLES:
+        return False
+    courses, nums = str(t["course"]).split(SUITE), str(t["chevaux"]).split(SUITE)
+    if len(courses) != 2 or len(nums) != 2:
+        return False
+    mise = float(t["mise"] or 0)
+    somme, remboursees = mise, 0
+    for course, num in zip(courses, nums):
+        a = lire_arrivee(course)
+        if a["annulee"] or num in a["non_partants"]:
+            remboursees += 1
+            continue
+        rapports = a[DOUBLES[t["pari"]]]
+        if not a["terminee"] or not rapports:
+            return False
+        somme *= float(rapports.get(num, 0.0))
+        if not somme:
+            break
+    resultat = REMBOURSE if remboursees == 2 else GAGNE if somme else PERDU
+    df.at[i, "resultat"], df.at[i, "gain_reel"] = resultat, round(somme, 2)
+    df.at[i, "source_gain"] = "rapports officiels PMU"
     return True
 
 

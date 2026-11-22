@@ -1,8 +1,8 @@
 # TurfMaster : aide à la décision
 
 Application Streamlit qui aide à **comprendre une course** (qui a des chances, à quel point elle est
-ouverte), classe les courses par prédiction, donne un conseil avec une mise plafond et montre
-**ce que coûte un pari**. Le conseil désigne le pari le plus probable, pas un pari rentable.
+ouverte) et propose un **one-shot** ponctuel, sur une ou deux courses, en montrant
+**ce qu'on peut gagner et perdre**. Le conseil désigne le pari le plus probable, pas un pari rentable.
 
 > **Aucun avantage sur les autres parieurs n'a été démontré.** Ne misez que ce que vous acceptez de
 > perdre. Joueurs Info Service : 09 74 75 13 13 (appel non surtaxé).
@@ -57,8 +57,7 @@ pari gagnant, donc du hasard. Multi et Tiercé ne figurent pas dans ce tableau (
 
 - **🏇 La course** : le feu, le podium estimé d'après les cotes, le risque d'un pari que vous
   choisissez et, sur demande, l'avis de l'IA et de la presse. Tout est gratuit sauf cet avis.
-- **🚦 Classement** : les courses françaises à venir, classées par chances du favori d'être placé, avec
-  conseil, mise et pronostics à plus de 30 %, sans requête Gemini.
+- **🎯 One-shot** : le ticket du jour, sur une ou deux courses, sans requête Gemini.
 - **📒 Mon carnet** : les paris réellement joués, leur résultat net et la comparaison IA / cotes.
 
 | Feu | Chances du favori de gagner | Sens |
@@ -69,29 +68,37 @@ pari gagnant, donc du hasard. Multi et Tiercé ne figurent pas dans ce tableau (
 
 **« Fiable » parle de l'estimation, jamais du gain. Un feu vert ne veut pas dire « rentable »** : il mesure le suspense, pas la rentabilité.
 
-### Les 3 courses du jour et leurs 3 paris
+### 🎯 Le one-shot
 
-Parmi les courses à venir, hors 🔴, les 3 où le favori a le plus de chances d'être placé. Chaque carte
-donne le pari (favori en Simple Placé), la mise plafond, l'arrivée estimée et les chances d'être placé.
+L'application sert à jouer **ponctuellement, pour s'amuser** : 20 ou 50 € sur une ou deux courses. Elle choisit
+la course où le favori a le plus de chances d'être placé (jamais une 🔴, ni un favori coté moins de 1,5 : il
+n'y aurait presque rien à gagner). On peut aussi choisir sa course.
+Pour un doublé, la 2e course part au moins 20 minutes après la 1re, pour rejouer tout ce qu'elle a rapporté.
 
-Ce sont les paris **les plus sûrs, pas des paris rentables** : sur 180 paris en 60 jours, 76,1 % placés
-(79,2 % en sept.-oct., 70,0 % en novembre) et −3,0 % des mises (−8,9 % en novembre). Les trois passent
-ensemble 38 % des jours. La sélection change quand les cotes bougent ou qu'une course part.
+| Façon de jouer | Pari | Fini en gain | Gain habituel si ça passe | Moyenne des mises | Cas |
+|---|---|--:|--:|--:|--:|
+| 🛡️ Tranquille | 1 Placé | 72,8 % | +30 % | −4,6 % | 180 |
+| 🚀 Gros coup | 1 Gagnant | 44,4 % | +100 % | −7,2 % | 180 |
+| 🎢 Doublé | 2 Placés enchaînés | 54,5 % | +68 % | −7,8 % | 165 |
+| 💥 Jackpot | 2 Gagnants enchaînés | 22,4 % | +320 % | −1,1 % (de −25 à +24 %) | 165 |
 
-**Plafonds d'affichage** : 75 % pour un cheval placé, 50 % pour un gagnant. Au-delà, le calcul promettait
-plus que la réalité. Même plafonné, le Placé des grands favoris était optimiste en novembre (69 %).
-Ces plafonds ont été fixés après avoir vu les 60 jours : ils n'ont pas de confirmation indépendante.
+Mesuré du 22/09 au 20/11/2026 sur les 3 courses les plus sûres de chaque jour (et leurs paires), cotes connues
+au moins 10 minutes avant le départ, rapports officiels. Novembre a été moins bon : 63 %, 40 %, 46 % et 19 %
+de cas en gain. **Aucune façon n'est rentable de façon fiable : on choisit combien on peut gagner contre quel
+risque de tout perdre.**
 
-### Conseil et mise conseillée
+Un seul one-shot noté par jour, dans le budget des 7 jours (50 € par défaut). Le carnet règle un doublé comme
+un seul pari, aux rapports officiels. Une grosse mise sur une petite course peut faire baisser le rapport.
 
-| Feu | Conseil | Mise maximale | Perte moyenne mesurée |
-|---|---|---|--:|
-| 🟢 | favori en Simple Placé | 10 % du budget des 7 jours | 6,1 % de la mise |
-| 🟠 | favori en Simple Placé | 5 % du budget des 7 jours | 6,2 % de la mise |
-| 🔴 | passer | 0 € | (21,6 % si l'on jouait) |
+**Plafonds d'affichage** : 75 % pour un cheval placé, 50 % pour un gagnant. Au-delà, le calcul promettait plus
+que la réalité. Ils ont été fixés après avoir vu les 60 jours : pas de confirmation indépendante.
 
-Mise entre 2 € et 10 €, 3 paris par jour au plus, jamais au-delà du budget restant. Ce n'est pas une
-stratégie gagnante : ne pas jouer reste le choix le moins cher.
+### Météo, hippodrome, terrain, historique : testés, non retenus
+
+Sur 1 126 courses, en n'apprenant que sur les jours précédents, chacune de ces informations ajoutée aux cotes
+d'avant départ a rendu la prévision légèrement **moins bonne** (hippodrome, état de piste, météo, 5 dernières
+courses de chaque cheval), et toutes ensemble nettement moins bonne. Seules des cotes plus tardives
+l'améliorent : d'où le rappel d'actualiser 10 minutes avant le départ.
 
 ### Pronostics à plus de 30 %
 

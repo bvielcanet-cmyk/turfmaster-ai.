@@ -110,9 +110,9 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None,
             mock.patch("requests.get", side_effect=faux_get), \
             mock.patch("streamlit.connection", return_value=sheets):
         at.run()
-        if at.radio:
+        if any(r.label == "Partants" for r in at.radio):
             if course is None:
-                at.radio[0].set_value("📋 Copier-coller").run()
+                champ(at.radio, "Partants").set_value("📋 Copier-coller").run()
             else:
                 [sb for sb in at.selectbox if sb.label == "Course"][0].select_index(course).run()
         if at.button and not at.exception and (at.text_area or course is not None):
@@ -191,7 +191,7 @@ def test_conseil_honnete_et_rien_de_preselectionne():
     at, _ = lancer([http()], presse=PRESSE)
     ecran = " ".join(textes(at.markdown) + textes(at.caption) + textes(at.info) + textes(at.success)
                      + [b.label for b in at.button] + [m.label for m in at.metric])
-    assert "Mise conseillée" in ecran and "Aucun pari testé n'est rentable" in ecran
+    assert "Aucun pari testé n'est rentable" in ecran
     for interdit in ("À JOUER", "JEU POSSIBLE", "ONE SHOT", "Kelly", "+22"):
         assert interdit not in ecran
     # rien n'est présélectionné : ni pari, ni cheval, ni mise
@@ -263,7 +263,7 @@ def test_erreurs(reponses, exc, message):
 
 def test_saisie_vide_et_lignes_ignorees():
     at, p = lancer([], texte="", recherche=False)
-    assert "collez des partants" in textes(at.error)[0] and p.call_count == 0
+    assert "colle des partants" in textes(at.error)[0] and p.call_count == 0
     at, _ = lancer([http()], texte="Prix de Paris\n" + SITE, recherche=False)
     assert "Prix de Paris" in textes(at.warning)[0]
 
@@ -308,23 +308,10 @@ def test_risque_du_pari_choisi(pari, gain):
     assert not gain or gain in ecran
 
 
-def test_aucun_conseil_sur_une_course_partie():
-    at, _ = demarrer(course=0)
-    assert "Mise conseillée" not in feu(at) and "Ne pas jouer" not in feu(at)
-
-
-def test_budget_epuise_conseille_de_passer():
-    recent = (pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
-    joues = pd.DataFrame([{"date": recent, "pari": "Simple Placé", "mise": 20, "resultat": "Perdu"}])
-    at, _ = demarrer(FauxSheets(TurfMaster=joues), course=1)
-    ecran = " ".join(textes(at.markdown))
-    assert "Ne pas jouer" in ecran and "Mise conseillée" not in ecran
-
-
 def test_budget_depasse():
     at, _ = demarrer(course=1)
-    choisir(at, mise=25.0)
-    assert any("dépassez votre budget" in w for w in textes(at.warning))
+    choisir(at, mise=55.0)
+    assert any("dépasses ton budget" in w for w in textes(at.warning))
 
 
 def test_stockage_local_sans_google_sheets(tmp_path):
@@ -362,15 +349,65 @@ def test_lecture_ratee_n_efface_rien():
     assert any("Impossible de noter" in e for e in textes(at.error))
 
 
-def test_courses_du_jour_sans_gemini():
+def trouver(at, sheets=None):
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p, \
+            mock.patch("streamlit.connection", return_value=sheets):
+        bouton(at, "TROUVER MON ONE-SHOT").click().run()
+    return p
+
+
+def deux_courses(monkeypatch):
+    lignes = [{"course": c, "heure": h, "hippodrome": "Auteuil", "feu": "vert", "favori": f"n° {n} CHEVAL",
+               "num": n, "nom": "CHEVAL", "cote": 2.0, "reunion": 1, "numero": k, "brut": .7, "place": .7,
+               "victoire": .45, "offerts": [], "pronostics": [], "arrivee": [], "partants": 8}
+              for c, h, n, k in (("R1C1", "14:00", "5", 1), ("R1C2", "15:00", "6", 2))]
+    monkeypatch.setattr(decision, "cribler", lambda *a, **k: lignes)
+
+
+@pytest.mark.parametrize("montant", decision.MONTANTS)
+def test_one_shot_ticket_lisible(monkeypatch, montant):
+    deux_courses(monkeypatch)
     at, _ = demarrer()
-    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p:
-        bouton(at, "EXPLORER LES COURSES").click().run()
+    with mock.patch("requests.get", side_effect=faux_get):
+        champ(at.radio, "💶 Je mets").set_value(montant).run()
+    p = trouver(at)
     assert p.call_count == 0 and not at.exception
-    assert any("R1C2" in m and "%" in m for m in textes(at.markdown))
-    ecran = " ".join(textes(at.markdown) + textes(at.warning) + textes(at.caption))
-    assert "Les 3 paris du jour" in ecran
-    assert ("Arrivée estimée" in ecran and "pas rentables" in ecran) or "Ne pas jouer" in ecran
+    assert len(champ(at.radio, "🎲 Je joue comment ?").options) == 4
+    carte = " ".join(m for m in textes(at.markdown) if 'tm-carte tm-ticket' in m)
+    assert "Tranquille" in carte and "tu gagnes environ" in carte and f"tes {montant}" in carte
+    assert any("pas pour gagner à la longue" in c for c in textes(at.caption))
+
+
+def test_double_note_puis_termine_pour_aujourd_hui(monkeypatch):
+    deux_courses(monkeypatch)
+    feuille = FauxSheets()
+    at, _ = demarrer(feuille)
+    trouver(at, feuille)
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("streamlit.connection", return_value=feuille):
+        champ(at.radio, "🎲 Je joue comment ?").set_value("jackpot").run()
+        assert "rejoue tout" in " ".join(textes(at.markdown))
+        bouton(at, "C'est joué, note-le").click().run()
+    ligne = feuille.onglets["TurfMaster"].iloc[0]
+    assert ligne["pari"] == "Doublé Gagnant" and ligne["course"] == "R1C1 > R1C2" and ligne["chevaux"] == "5 > 6"
+    assert ligne["mise"] == 20
+    assert any("C'est joué pour aujourd'hui" in m for m in textes(at.markdown))
+    assert not any("ONE-SHOT" in b.label for b in at.button)
+
+
+def test_one_shot_refuse_hors_budget():
+    recent = (pd.Timestamp.now() - pd.Timedelta(days=2)).strftime("%Y-%m-%d %H:%M")
+    joues = pd.DataFrame([{"date": recent, "pari": "Simple Placé", "mise": 45, "resultat": "Perdu"}])
+    at, _ = demarrer(FauxSheets(TurfMaster=joues))
+    assert any("dépasse" in w for w in textes(at.warning))
+    assert not any("ONE-SHOT" in b.label for b in at.button)
+
+
+def test_one_shot_avec_les_vraies_fonctions():
+    at, _ = demarrer()
+    p = trouver(at)
+    ecran = " ".join(textes(at.markdown))
+    assert p.call_count == 0 and not at.exception
+    assert "tm-carte tm-ticket" in ecran or "Ne pas jouer" in ecran
 
 
 # --- Programme PMU, arrivées et mesure -----------------------------------------
