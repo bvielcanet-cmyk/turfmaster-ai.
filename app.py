@@ -63,6 +63,9 @@ st.markdown("""
     .tm-sous { font-size: .8rem; opacity: .7; margin-top: 3px; }
     .tm-presse { background: #8b5cf6; }
     .tm-joker { border: 2px dashed #d9822b; }
+    .tm-grille { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 6px; }
+    .tm-grille span { display: block; font-size: .72rem; opacity: .7; }
+    .tm-grille b { font-size: 1.15rem; }
     .tm-rouge { border-color: #dc2626; background: rgba(220, 38, 38, .10); }
     .tm-rouge .tm-titre { color: #ef4444; }
     .tm-sources a { margin-right: 10px; }
@@ -272,15 +275,14 @@ def conseil_place_html(c, profil):
 <div class="tm-titre">🎯 PLACÉ CONSEILLÉ</div>
 <div class="tm-pari">Simple Placé · n° {escape(c['num'])} {escape(c['nom'])}</div>
 <div class="tm-chiffres">
-<div><span>Mise ({escape(profil)})</span><b>{euros(c['mise'])}</b><small>mise fixe, en test</small></div>
-<div><span>Cote Placé probable</span><b>{c['cote_min']:g} – {c['cote_max']:g}</b><small>jouer seulement si le minimum reste ≥ {c['cote_mini_a_jouer']:.2f}</small></div>
-<div><span>Gain espéré</span><b>{c['gain_espere'] * 100:+.0f}\u00a0%</b><small>calcul souvent optimiste</small></div>
+<div><span>Chances de placé</span><b>{c['proba_corrigee'] * 100:.0f}\u00a0%</b><small>estimation corrigée</small></div>
+<div><span>Mise conseillée</span><b>{euros(c['mise'])}</b><small>profil {escape(profil)}</small></div>
+<div><span>Cote Placé probable</span><b>{c['cote_min']:g} – {c['cote_max']:g}</b><small>jouer seulement si ≥ {c['cote_mini_a_jouer']:.2f}</small></div>
+<div><span>Gain espéré</span><b>{c['gain_espere'] * 100:+.0f}\u00a0%</b><small>par euro misé, calcul optimiste</small></div>
 </div>
-<div class="tm-pourquoi">Chances de placé estimées ≈ <b>{c['proba_corrigee']:.0%}</b> (formule corrigée, plus réaliste).<br>
-🧪 <b>Phase de test (suivi à blanc)</b> : ce conseil est noté et sera réglé automatiquement
+<div class="tm-pourquoi">🧪 <b>Phase de test (suivi à blanc)</b> : ce conseil est noté et sera réglé automatiquement
 au rapport officiel. Ne misez pas avant d'avoir vu le bilan dans l'onglet Historique.</div>
 </div>"""
-
 
 def tester_courses_passees(stockage, profil, capital, confiance, nombre=5, jours=7):
     """Analyse `nombre` courses françaises déjà courues (jours précédents), sans recherche internet,
@@ -510,35 +512,62 @@ def presse_html(compil):
 
 
 def plan_html(sel, jok, budget, profil):
+    """Paris retenus, du plus probable au moins probable, avec la mise conseillée bien visible."""
     if sel.empty or sel["mise"].sum() == 0:
         corps = ('<div class="tm-verdict tm-neutre"><div class="tm-titre">📅 Aucune course prometteuse pour '
                  f'le profil {escape(profil)}</div><div class="tm-pourquoi">Mieux vaut ne rien jouer que forcer un '
                  'pari. Relancez l\'analyse plus tard : les cotes bougent au fil de la journée.</div></div>')
     else:
         lignes = []
-        for _, r in sel.iterrows():
-            if r["mise"] <= 0:
-                continue
-            lignes.append(
-                f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-num">{escape(r["heure"])}</span>'
-                f'<span class="tm-nom">{escape(r["course"])} {escape(r["hippodrome"])} — Placé n° {escape(r["num"])} '
-                f'{escape(r["nom"])}</span><span class="tm-pct">{euros(r["mise"])}</span></div>'
-                f'<div class="tm-sous">cote Placé {r["cote_min"]:g}–{r["cote_max"]:g} · jouer si ≥ '
-                f'{r["cote_mini_a_jouer"]:.2f} · chances de placé ≈ {r["proba_corrigee"]:.0%} · '
-                f'valeur {r["valeur"] * 100:+.0f}\u00a0%</div></div>')
+        for _, r in sel[sel["mise"] > 0].sort_values("proba_corrigee", ascending=False).iterrows():
+            lignes.append(ligne_pari_html(r))
         corps = "".join(lignes)
     if jok:
-        corps += (f'<div class="tm-ligne tm-joker"><div class="tm-tete"><span class="tm-num">{escape(jok["heure"])}</span>'
-                  f'<span class="tm-nom">🃏 Joker : {escape(jok["course"])} {escape(jok["hippodrome"])} — Placé n° '
-                  f'{escape(jok["num"])} {escape(jok["nom"])}</span><span class="tm-pct">{euros(jok["mise"])}</span></div>'
-                  f'<div class="tm-sous">outsider (cote Gagnant {jok["cote_gagnant"]:g}) · cote Placé '
-                  f'{jok["cote_min"]:g}–{jok["cote_max"]:g} · jouer si ≥ {jok["cote_mini_a_jouer"]:.2f} · '
-                  f'<b>non prouvé, très variable</b></div></div>')
+        corps += ligne_pari_html(pd.Series(jok), joker=True)
     total = (sel["mise"].sum() if not sel.empty else 0) + (jok["mise"] if jok else 0)
-    return corps + (f'<div class="tm-legende">Total : <b>{euros(total)}</b> sur {euros(budget)} · profil '
-                    f'{escape(profil)} · plan provisoire : reconfirmez chaque pari 5 à 10 minutes avant le départ '
-                    '(cote Placé minimale ≥ seuil indiqué).</div>')
+    return corps + (f'<div class="tm-legende">Total des mises conseillées : <b>{euros(total)}</b> sur '
+                    f'{euros(budget)} · profil {escape(profil)} · plan provisoire : reconfirmez chaque pari 5 à 10 '
+                    'minutes avant le départ (la cote Placé minimale doit rester au-dessus du seuil indiqué).</div>')
 
+
+def ligne_pari_html(r, joker=False):
+    """Une ligne de pari : chances de placé en gros, mise conseillée à côté, détails dessous."""
+    etiquette = '<span class="tm-tag tm-tag-out">🃏 JOKER · non prouvé</span>' if joker else ""
+    precision = f" · outsider, cote Gagnant {r['cote_gagnant']:g}" if joker else ""
+    return (f'<div class="tm-ligne{" tm-joker" if joker else ""}"><div class="tm-tete">'
+            f'<span class="tm-num">{escape(r["heure"])}</span>'
+            f'<span class="tm-nom">{escape(r["course"])} {escape(r["hippodrome"])} · Placé n° {escape(r["num"])} '
+            f'{escape(r["nom"])}</span>{etiquette}</div>'
+            f'<div class="tm-grille">'
+            f'<div><span>Chances de placé</span><b>{r["proba_corrigee"] * 100:.0f}\u00a0%</b></div>'
+            f'<div><span>Mise conseillée</span><b>{euros(r["mise"])}</b></div>'
+            f'<div><span>Cote Placé</span><b>{r["cote_min"]:g}–{r["cote_max"]:g}</b></div>'
+            f'<div><span>Gain espéré</span><b>{r["valeur"] * 100:+.0f}\u00a0%</b></div></div>'
+            f'<div class="tm-sous">jouer seulement si la cote Placé minimale reste ≥ {r["cote_mini_a_jouer"]:.2f}'
+            f'{precision}</div></div>')
+
+
+def ordre_html(ordre, num_conseil=None, nombre=6):
+    """Ordre d'arrivée estimé : chances de victoire et de placé de chaque cheval (information seulement)."""
+    if ordre.empty:
+        return ""
+    rangs = {1: "🥇", 2: "🥈", 3: "🥉"}
+    maxi = float(ordre["victoire"].max()) or 1
+    lignes = []
+    for _, o in ordre.head(nombre).iterrows():
+        conseil = o["num"] == num_conseil
+        tag = '<span class="tm-tag tm-tag-pari">PLACÉ CONSEILLÉ</span>' if conseil else ""
+        lignes.append(
+            f'<div class="tm-ligne{" tm-choisi" if conseil else ""}"><div class="tm-tete">'
+            f'<span class="tm-rang">{rangs.get(o["rang"], o["rang"])}</span><span class="tm-num">{escape(o["num"])}</span>'
+            f'<span class="tm-nom">{escape(o["nom"])}</span>{tag}'
+            f'<span class="tm-pct">{o["victoire"] * 100:.0f}\u00a0%</span></div>'
+            f'<div class="tm-barre"><div class="tm-ia" style="width:{o["victoire"] / maxi * 100:.1f}%"></div></div>'
+            f'<div class="tm-sous">gagner {o["victoire"] * 100:.0f}\u00a0% · être placé {o["place"] * 100:.0f}\u00a0% · '
+            f'cote {o["cote"]:g}</div></div>')
+    return ('<div class="tm-legende">Ordre estimé d\'après les cotes (% = chances de gagner). Information seulement : '
+            'sur les courses passées, le 1er estimé gagne 30 % du temps et le trio exact ne sort que 2 fois sur 100.'
+            '</div>' + "".join(lignes))
 
 def feu_html(bilan, budget):
     """Encadré du feu tricolore du mode one shot."""
@@ -773,6 +802,13 @@ with onglet_prono:
         st.markdown(conseil_place_html(cp["conseil"], cp["profil"]), unsafe_allow_html=True)
         if cp["note"]:
             st.caption(f"ℹ️ {cp['note']}")
+        with st.expander("🏁 Ordre d'arrivée estimé de la course"):
+            try:
+                ordre = plan.ordre_estime(partants_pmu(jour, course_pmu["reunion"], course_pmu["course"]))
+                st.markdown(ordre_html(ordre, cp["conseil"]["num"] if cp["conseil"] else None),
+                            unsafe_allow_html=True)
+            except pmu.PmuErreur as e:
+                st.caption(f"Indisponible ({e}).")
 
     # Le résultat est gardé en mémoire : il reste affiché quand on clique sur « Enregistrer ».
     r = st.session_state.get("resultat")
@@ -940,14 +976,34 @@ with onglet_plan:
                     except (pmu.PmuErreur, ValueError, KeyError, TypeError):
                         pl["ia"][r["course"]] = "analyse impossible"
             st.rerun()
-        with st.expander("Toutes les courses avec un Placé intéressant"):
-            if conseils_jour.empty:
-                st.caption("Aucune.")
-            else:
-                st.dataframe(conseils_jour.drop(columns=["reunion", "numero", "libelle", "gain_regle"]),
-                             hide_index=True, width="stretch", column_config={
-                                 "proba_corrigee": st.column_config.NumberColumn("Chances placé", format="percent"),
-                                 "valeur": st.column_config.NumberColumn("Valeur", format="percent")})
+        # Ordre d'arrivée estimé des courses retenues (information seulement)
+        for r in retenues:
+            with st.expander(f"🏁 Ordre d'arrivée estimé — {r['heure']} {r['course']} {r['hippodrome']}"):
+                try:
+                    ordre = plan.ordre_estime(partants_pmu(date.today(), int(r["reunion"]), int(r["numero"])))
+                    st.markdown(ordre_html(ordre, str(r["num"])), unsafe_allow_html=True)
+                except pmu.PmuErreur as e:
+                    st.caption(f"Indisponible ({e}).")
+
+        # Toutes les courses intéressantes, de la plus probable à la moins probable
+        st.markdown("#### 📋 Courses avec un Placé intéressant, de la plus probable à la moins probable")
+        if conseils_jour.empty:
+            st.caption("Aucune pour l'instant.")
+        else:
+            tableau = (conseils_jour[conseils_jour["regle"] == "confirmée"]
+                       .sort_values("proba_corrigee", ascending=False)
+                       .assign(cheval=lambda d: "n° " + d["num"].astype(str) + " " + d["nom"].astype(str),
+                               cote_place=lambda d: d["cote_min"].map("{:g}".format) + " – " + d["cote_max"].map("{:g}".format))
+                       [["heure", "course", "hippodrome", "cheval", "proba_corrigee", "cote_place", "cote_mini_a_jouer",
+                         "valeur", "cote_gagnant"]])
+            st.dataframe(tableau, hide_index=True, width="stretch", column_config={
+                "heure": "Heure", "course": "Course", "hippodrome": "Hippodrome", "cheval": "Placé conseillé",
+                "proba_corrigee": st.column_config.ProgressColumn("Chances de placé", format="percent",
+                                                                  min_value=0.0, max_value=1.0),
+                "cote_place": "Cote Placé", "cote_mini_a_jouer": st.column_config.NumberColumn("Jouer si ≥", format="%.2f"),
+                "valeur": st.column_config.NumberColumn("Gain espéré", format="percent"),
+                "cote_gagnant": st.column_config.NumberColumn("Cote Gagnant", format="%.1f")})
+            st.caption("Cote Gagnant ≥ 8 : outsider, hors du plan principal (voir le joker).")
 
 with onglet_histo:
     if message_sheets:

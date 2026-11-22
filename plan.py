@@ -232,3 +232,24 @@ def one_shot(conseils, budget, profil):
               "rouge": "risque de tout perdre trop élevé"}[feu]
     return paris, {"feu": feu, "raison": raison, "n": len(paris), "risque_tout_perdre": risque,
                    "gain_espere": esperance, "total": float(paris["mise"].sum()), "gain_observe": GAIN_OBSERVE}
+
+
+# --- Ordre d'arrivée estimé (information, pas un pari) ---------------------------------------
+#
+# Sur 1 782 courses passées de 8 partants ou plus, l'ordre estimé d'après les cotes donne : le 1er
+# estimé gagne 30 % du temps ; le vainqueur est parmi les 3 premiers estimés 59 % du temps ; le trio
+# exact dans l'ordre ne sort que 1,9 % du temps (6,6 % dans le désordre). C'est donc une indication
+# des chevaux à surveiller, pas un pari conseillé.
+
+def ordre_estime(df):
+    """Partants classés du plus probable au moins probable : chances de victoire (cotes, marge retirée)
+    et chances de placé (Harville corrigé)."""
+    if df.empty or df["COTE"].isna().any():
+        return pd.DataFrame(columns=["rang", "num", "nom", "cote", "victoire", "place"])
+    inv = 1 / df["COTE"].astype(float).to_numpy()
+    q = inv / inv.sum()
+    places = place.harville_place(q, place.nombre_places(len(df)), place.LAMBDA_2E, place.LAMBDA_3E)
+    ordre = pd.DataFrame({"num": df["NUM"].astype(str).to_numpy(), "nom": df["NOM"].to_numpy(),
+                          "cote": df["COTE"].astype(float).to_numpy(), "victoire": q, "place": places})
+    ordre = ordre.sort_values("victoire", ascending=False).reset_index(drop=True)
+    return ordre.assign(rang=range(1, len(ordre) + 1))[["rang", "num", "nom", "cote", "victoire", "place"]]

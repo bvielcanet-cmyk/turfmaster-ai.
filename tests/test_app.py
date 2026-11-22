@@ -727,3 +727,28 @@ def test_one_shot_rouge_sans_promesse_de_gain():
         bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
     feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
     assert "NE PAS JOUER" in feu and "de risque de tout perdre" in feu and "2 sur 3" not in feu
+
+
+
+# --- Lisibilité et ordre estimé --------------------------------------------------------------
+
+def test_conseil_affiche_chances_et_mise_conseillee():
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=faux_get):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    html = conseil_html(at)
+    assert "Chances de placé" in html and "Mise conseillée" in html and "10,00" in html
+    ordre = " ".join(m.value for m in at.markdown if "Ordre estimé" in m.value)
+    assert "PLACÉ CONSEILLÉ" in ordre and "STINGO" in ordre and "2 fois sur 100" in ordre
+
+
+def test_plan_tableau_trie_par_probabilite():
+    from test_plan import conseils_types
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("plan.cribler", return_value=(conseils_types(), 9)):
+        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
+    tableau = at.dataframe[-1].value
+    assert list(tableau["proba_corrigee"]) == sorted(tableau["proba_corrigee"], reverse=True)
+    lignes = " ".join(m.value for m in at.markdown if "tm-grille" in m.value)
+    assert "Mise conseillée" in lignes and "Chances de placé" in lignes
