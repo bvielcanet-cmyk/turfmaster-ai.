@@ -100,3 +100,44 @@ def test_jamais_au_dela_du_budget(budget, profil):
     assert sel["mise"].sum() + (jok["mise"] if jok else 0) <= budget
     sel, jok = plan.composer(conseils_types(), budget, profil, avec_joker=True, budget_pertes=12)
     assert sel["mise"].sum() + (jok["mise"] if jok else 0) <= 12
+
+
+
+# --- One shot ------------------------------------------------------------------------------------
+
+def test_chances_calculees():
+    perte, gain = plan.chances_calculees([.5, .5], [3.0, 3.0], [.5, .5])
+    assert perte == pytest.approx(.25) and gain == pytest.approx(.75)  # un seul gagnant suffit (1,5 > 1)
+    perte, gain = plan.chances_calculees([.5, .5], [1.5, 1.5], [.5, .5])
+    assert gain == pytest.approx(.25)  # il faut les deux
+
+
+def test_repartition_optimale_mise_plus_sur_le_plus_sur():
+    parts = plan.repartition_optimale([.7, .3], [1.6, 4.0])
+    assert parts.sum() == pytest.approx(1) and parts[0] > parts[1]
+    assert plan.chances_calculees([.7, .3], [1.6, 4.0], parts)[1] >= plan.chances_calculees([.7, .3], [1.6, 4.0], [.5, .5])[1]
+
+
+@pytest.mark.parametrize("profil, n", [("Prudent", 2), ("Équilibré", 3), ("Offensif", 2)])
+def test_one_shot(profil, n):
+    paris, bilan = plan.one_shot(conseils_types(), 50, profil)
+    assert bilan["n"] == len(paris) == n
+    assert paris["mise"].sum() <= 50 and (paris["mise"] >= plan.MISE_MIN).all()
+    assert bilan["feu"] in ("vert", "orange", "rouge")
+    assert 0 < bilan["risque_tout_perdre"] <= 1
+
+
+def test_one_shot_rouge():
+    seul = conseils_types().head(1)
+    paris, bilan = plan.one_shot(seul, 50, "Équilibré")
+    assert bilan["feu"] == "rouge" and "moins de 2" in bilan["raison"]
+    paris, bilan = plan.one_shot(conseils_types(), 3, "Équilibré")  # budget trop petit pour 2 mises de 2 €
+    assert bilan["feu"] == "rouge"
+
+
+def test_feu_selon_le_risque():
+    c = conseils_types()
+    surs = c.assign(proba_corrigee=.8, cote_min=1.5, valeur=.2)
+    risques = c.assign(proba_corrigee=.2, cote_min=6.0, valeur=.2)
+    assert plan.one_shot(surs, 50, "Équilibré")[1]["feu"] == "vert"
+    assert plan.one_shot(risques, 50, "Équilibré")[1]["feu"] == "rouge"

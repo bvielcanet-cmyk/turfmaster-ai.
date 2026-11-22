@@ -63,6 +63,8 @@ st.markdown("""
     .tm-sous { font-size: .8rem; opacity: .7; margin-top: 3px; }
     .tm-presse { background: #8b5cf6; }
     .tm-joker { border: 2px dashed #d9822b; }
+    .tm-rouge { border-color: #dc2626; background: rgba(220, 38, 38, .10); }
+    .tm-rouge .tm-titre { color: #ef4444; }
     .tm-sources a { margin-right: 10px; }
     .tm-legende { font-size: .8rem; opacity: .7; margin: 2px 0 10px; }
     .tm-legende i { display: inline-block; vertical-align: middle; margin: 0 4px 0 2px; }
@@ -538,6 +540,33 @@ def plan_html(sel, jok, budget, profil):
                     '(cote Placé minimale ≥ seuil indiqué).</div>')
 
 
+def feu_html(bilan, budget):
+    """Encadré du feu tricolore du mode one shot."""
+    titre = {"vert": "🟢 JEU POSSIBLE", "orange": "🟠 RISQUE ÉLEVÉ", "rouge": "🔴 NE PAS JOUER AUJOURD'HUI"}
+    classe = {"vert": "tm-oui", "orange": "tm-non", "rouge": "tm-rouge"}
+    if bilan["feu"] == "rouge" and "risque_tout_perdre" in bilan:
+        corps = (f'<div class="tm-pari">{escape(bilan["raison"][:1].upper() + bilan["raison"][1:])} : environ '
+                 f'{bilan["risque_tout_perdre"] * 100:.0f}\u00a0% de risque de tout perdre.</div>'
+                 '<div class="tm-pourquoi">Mieux vaut garder le budget pour un autre jour. Relancez l\'analyse plus '
+                 'tard : les cotes bougent au fil de la journée.</div>')
+    elif "risque_tout_perdre" not in bilan:
+        corps = (f'<div class="tm-pari">{escape(bilan["raison"][:1].upper() + bilan["raison"][1:])}.</div>'
+                 '<div class="tm-pourquoi">Mieux vaut garder le budget pour un autre jour. Relancez l\'analyse plus '
+                 'tard : les cotes bougent au fil de la journée.</div>')
+    else:
+        gain_txt, gain_note = (("≈ 2 sur 3", "moyenne des plans passés de ce type") if bilan["feu"] == "vert"
+                               else ("moins de 2 sur 3", "plan plus risqué que la moyenne"))
+        corps = f"""<div class="tm-pari">{escape(bilan['raison'][:1].upper() + bilan['raison'][1:])} · {bilan['n']} Placés · {euros(bilan['total'])} misés</div>
+<div class="tm-chiffres">
+<div><span>Risque de tout perdre</span><b>≈ {bilan['risque_tout_perdre'] * 100:.0f}\u00a0%</b><small>estimation corrigée</small></div>
+<div><span>Finir en gain</span><b>{gain_txt}</b><small>{gain_note}</small></div>
+<div><span>Gain espéré</span><b>{bilan['gain_espere'] * 100:+.0f}\u00a0%</b><small>calcul souvent optimiste</small></div>
+</div>
+<div class="tm-pourquoi">Mises réparties pour <b>maximiser les chances de finir en gain</b> (plus sur le Placé le plus
+sûr). Budget de {euros(budget)} joué une fois : vous pouvez le perdre entièrement.</div>"""
+    return f'<div class="tm-verdict {classe[bilan["feu"]]}"><div class="tm-titre">{titre[bilan["feu"]]}</div>{corps}</div>'
+
+
 def avis_ia(course_row, df, profil):
     """Avis de l'IA (1 requête Gemini, sans recherche) sur le cheval retenu : compare ses chances de victoire
     selon l'IA et selon les cotes. Informatif : ne change pas le pari."""
@@ -826,6 +855,10 @@ with onglet_prono:
 with onglet_plan:
     st.caption("Toutes les courses françaises à venir sont passées au crible **gratuitement** (sans IA) avec la "
                "règle Placé ; les plus prometteuses sont retenues et le budget est réparti selon le profil.")
+    UN_COUP, DUREE = "🎯 One shot : je joue ce budget une fois", "📈 Dans la durée (capital et protection)"
+    mode = st.radio("Mode", [UN_COUP, DUREE], horizontal=True, label_visibility="collapsed",
+                    help="One shot : le budget est joué une seule fois, sans lien avec un capital (vous acceptez de "
+                         "le perdre). Dans la durée : les mises suivent votre capital et sa protection.")
     c1, c2 = st.columns([2, 1])
     budget_jour = c1.slider("Budget du jour (€)", 20, 100, 50, step=5)
     avec_joker = c2.toggle("🃏 Joker outsider", value=False,
@@ -849,15 +882,29 @@ with onglet_plan:
     pl = st.session_state.get("plan")
     if pl:
         conseils_jour = pl["conseils"]
-        budget_effectif = budget_jour * etat_capital["facteur"]
-        if etat_capital["reduit"]:
-            st.warning(f"🛡️ Protection active : budget ramené à {euros(budget_effectif)} "
-                       f"(capital {etat_capital['baisse']:.0%} sous son plus haut).")
-        sel, jok = plan.composer(conseils_jour, budget_effectif, profil, avec_joker, budget_pertes())
         st.caption(f"Analyse de {pl['heure']} : {pl['vus']} courses à venir, "
                    f"{conseils_jour['course'].nunique() if not conseils_jour.empty else 0} avec un Placé intéressant.")
-        st.markdown(plan_html(sel, jok, budget_jour, profil), unsafe_allow_html=True)
-        retenues = [r for _, r in sel.iterrows() if r["mise"] > 0] + ([pd.Series(jok)] if jok else [])
+        if mode == UN_COUP:
+            budget_principal = budget_jour * (1 - plan.PART_JOKER) if avec_joker else budget_jour
+            sel, bilan_os = plan.one_shot(conseils_jour, budget_principal, profil)
+            jok = plan.joker(conseils_jour, sel, budget_jour) if avec_joker and bilan_os["feu"] != "rouge" else None
+            st.markdown(feu_html(bilan_os, budget_jour), unsafe_allow_html=True)
+            if bilan_os["feu"] == "rouge":
+                if not sel.empty:
+                    st.caption("Paris écartés : " + ", ".join(f"{r['course']} n° {r['num']} {r['nom']}"
+                                                              for _, r in sel.iterrows()))
+                sel = sel.assign(mise=[0.0] * len(sel))
+            else:
+                st.markdown(plan_html(sel, jok, budget_jour, profil), unsafe_allow_html=True)
+        else:
+            budget_effectif = budget_jour * etat_capital["facteur"]
+            if etat_capital["reduit"]:
+                st.warning(f"🛡️ Protection active : budget ramené à {euros(budget_effectif)} "
+                           f"(capital {etat_capital['baisse']:.0%} sous son plus haut).")
+            sel, jok = plan.composer(conseils_jour, budget_effectif, profil, avec_joker, budget_pertes())
+            st.markdown(plan_html(sel, jok, budget_jour, profil), unsafe_allow_html=True)
+        retenues = ([r for _, r in sel.iterrows() if r["mise"] > 0] if not sel.empty else []) \
+            + ([pd.Series(jok)] if jok else [])
         for r in retenues:
             if r["course"] in pl["ia"]:
                 st.caption(f"🔬 {r['course']} n° {r['num']} : {pl['ia'][r['course']]}")
