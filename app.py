@@ -12,6 +12,7 @@ import streamlit as st
 
 import mesure
 import place
+import plan
 import pmu
 import turf_logic as tl
 
@@ -60,6 +61,7 @@ st.markdown("""
     .tm-marche { position: absolute; top: -3px; width: 3px; height: 14px; background: currentColor; opacity: .75; border-radius: 2px; }
     .tm-sous { font-size: .8rem; opacity: .7; margin-top: 3px; }
     .tm-presse { background: #8b5cf6; }
+    .tm-joker { border: 2px dashed #d9822b; }
     .tm-sources a { margin-right: 10px; }
     .tm-legende { font-size: .8rem; opacity: .7; margin: 2px 0 10px; }
     .tm-legende i { display: inline-block; vertical-align: middle; margin: 0 4px 0 2px; }
@@ -504,6 +506,55 @@ def presse_html(compil):
     return "".join(lignes)
 
 
+def plan_html(sel, jok, budget, profil):
+    if sel.empty or sel["mise"].sum() == 0:
+        corps = ('<div class="tm-verdict tm-neutre"><div class="tm-titre">📅 Aucune course prometteuse pour '
+                 f'le profil {escape(profil)}</div><div class="tm-pourquoi">Mieux vaut ne rien jouer que forcer un '
+                 'pari. Relancez l\'analyse plus tard : les cotes bougent au fil de la journée.</div></div>')
+    else:
+        lignes = []
+        for _, r in sel.iterrows():
+            if r["mise"] <= 0:
+                continue
+            lignes.append(
+                f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-num">{escape(r["heure"])}</span>'
+                f'<span class="tm-nom">{escape(r["course"])} {escape(r["hippodrome"])} — Placé n° {escape(r["num"])} '
+                f'{escape(r["nom"])}</span><span class="tm-pct">{euros(r["mise"])}</span></div>'
+                f'<div class="tm-sous">cote Placé {r["cote_min"]:g}–{r["cote_max"]:g} · jouer si ≥ '
+                f'{r["cote_mini_a_jouer"]:.2f} · chances de placé ≈ {r["proba_corrigee"]:.0%} · '
+                f'valeur {r["valeur"] * 100:+.0f}\u00a0%</div></div>')
+        corps = "".join(lignes)
+    if jok:
+        corps += (f'<div class="tm-ligne tm-joker"><div class="tm-tete"><span class="tm-num">{escape(jok["heure"])}</span>'
+                  f'<span class="tm-nom">🃏 Joker : {escape(jok["course"])} {escape(jok["hippodrome"])} — Placé n° '
+                  f'{escape(jok["num"])} {escape(jok["nom"])}</span><span class="tm-pct">{euros(jok["mise"])}</span></div>'
+                  f'<div class="tm-sous">outsider (cote Gagnant {jok["cote_gagnant"]:g}) · cote Placé '
+                  f'{jok["cote_min"]:g}–{jok["cote_max"]:g} · jouer si ≥ {jok["cote_mini_a_jouer"]:.2f} · '
+                  f'<b>non prouvé, très variable</b></div></div>')
+    total = (sel["mise"].sum() if not sel.empty else 0) + (jok["mise"] if jok else 0)
+    return corps + (f'<div class="tm-legende">Total : <b>{euros(total)}</b> sur {euros(budget)} · profil '
+                    f'{escape(profil)} · plan provisoire : reconfirmez chaque pari 5 à 10 minutes avant le départ '
+                    '(cote Placé minimale ≥ seuil indiqué).</div>')
+
+
+def avis_ia(course_row, df, profil):
+    """Avis de l'IA (1 requête Gemini, sans recherche) sur le cheval retenu : compare ses chances de victoire
+    selon l'IA et selon les cotes. Informatif : ne change pas le pari."""
+    partants_str = "\n".join(f"{row['FULL_ID']} ({row['Info']})" for _, row in df.iterrows())
+    raw = analyser_course(partants_str, course_row["hippodrome"], course_row["discipline"], profil, None, None, API_KEY)
+    res, _ = tl.valider_reponse(tl.extraire_json(raw), df)
+    ia = {c["num"]: c["p"] for c in res["chevaux"]}
+    marche = tl.probas_marche(df) or {}
+    p_ia, q = ia.get(str(course_row["num"]), 0.0), marche.get(str(course_row["num"]), 0.0)
+    if q and p_ia >= 1.15 * q:
+        avis = "👍 l'IA lui donne plus de chances que les cotes"
+    elif q and p_ia <= 0.85 * q:
+        avis = "⚠️ l'IA lui donne moins de chances que les cotes : prudence"
+    else:
+        avis = "➖ l'IA est d'accord avec les cotes"
+    return f"{avis} (victoire : IA {pct(p_ia)}, cotes {pct(q)})"
+
+
 # --- 3. INTERFACE ---
 st.title("🚀 TurfMaster 2.5 : Ultimate Investor")
 st.caption("Choisissez une course : l'application vous dit **s'il faut jouer**, sur quel cheval et combien.")
@@ -533,7 +584,8 @@ analyses_enregistrees, _ = stockage.lire(FEUILLE_ANALYSES, mesure.COLONNES_ANALY
 precision = mesure.scores(analyses_enregistrees)
 confiance, confiance_mesuree = mesure.confiance_ia(precision, tl.CONFIANCE_IA)
 # La clé garde l'onglet ouvert quand la page se recharge (après un clic sur un bouton)
-onglet_prono, onglet_histo = st.tabs(["🎯 Pronostic", "📊 Historique"], key="onglet")
+onglet_prono, onglet_plan, onglet_histo = st.tabs(["🎯 Pronostic", "📅 Plan du jour", "📊 Historique"],
+                                                  key="onglet")
 
 with onglet_prono:
     PMU, COLLE = "📅 Programme PMU", "📋 Copier-coller"
@@ -754,6 +806,81 @@ with onglet_prono:
                     st.error("Impossible d'enregistrer le ticket. "
                              + (stockage.derniere_erreur or "Stockage indisponible."))
 
+with onglet_plan:
+    st.caption("Toutes les courses françaises à venir sont passées au crible **gratuitement** (sans IA) avec la "
+               "règle Placé ; les plus prometteuses sont retenues et le budget est réparti selon le profil.")
+    c1, c2 = st.columns([2, 1])
+    budget_jour = c1.slider("Budget du jour (€)", 20, 100, 50, step=5)
+    avec_joker = c2.toggle("🃏 Joker outsider", value=False,
+                           help="10 % du budget sur le meilleur outsider (cote Gagnant ≥ 8) qui passe la règle "
+                                "Placé. Non prouvé : très peu de données passées, résultats très variables.")
+    if st.button("🔍 ANALYSER TOUTES LES COURSES DU JOUR (gratuit)", width="stretch"):
+        barre = st.progress(0.0, text="Lecture du programme...")
+
+        def avancement(k, n, c):
+            barre.progress(k / max(n, 1), text=f"{c['id']} · {c['hippodrome']} ({k + 1}/{n})")
+        try:
+            conseils_jour, vus = plan.cribler(date.today(), datetime.now(tz=pmu.PARIS), lire_partants=partants_pmu,
+                                              lire_cotes=cotes_place_pmu, programme=programme_pmu(date.today()),
+                                              pause=0.2, progression=avancement)
+            st.session_state["plan"] = {"conseils": conseils_jour, "vus": vus, "ia": {},
+                                        "heure": datetime.now(tz=pmu.PARIS).strftime("%H:%M")}
+        except pmu.PmuErreur as e:
+            st.error(f"❌ {e}")
+        barre.empty()
+
+    pl = st.session_state.get("plan")
+    if pl:
+        conseils_jour = pl["conseils"]
+        sel, jok = plan.composer(conseils_jour, budget_jour, profil, avec_joker, budget_pertes())
+        st.caption(f"Analyse de {pl['heure']} : {pl['vus']} courses à venir, "
+                   f"{conseils_jour['course'].nunique() if not conseils_jour.empty else 0} avec un Placé intéressant.")
+        st.markdown(plan_html(sel, jok, budget_jour, profil), unsafe_allow_html=True)
+        retenues = [r for _, r in sel.iterrows() if r["mise"] > 0] + ([pd.Series(jok)] if jok else [])
+        for r in retenues:
+            if r["course"] in pl["ia"]:
+                st.caption(f"🔬 {r['course']} n° {r['num']} : {pl['ia'][r['course']]}")
+
+        b1, b2 = st.columns(2)
+        if retenues and b1.button("🔄 Actualiser les cotes des courses retenues", width="stretch"):
+            st.cache_data.clear()  # relit les cotes du PMU
+            frais = conseils_jour[~conseils_jour["course"].isin([r["course"] for r in retenues])]
+            nouveaux = []
+            for r in retenues:
+                try:
+                    course = {"id": r["course"], "heure": r["heure"], "hippodrome": r["hippodrome"],
+                              "discipline": r["discipline"], "libelle": r["libelle"],
+                              "reunion": int(r["reunion"]), "course": int(r["numero"])}
+                    nouveaux += plan.evaluer_course(course, partants_pmu(date.today(), course["reunion"], course["course"]),
+                                                    cotes_place_pmu(date.today(), course["reunion"], course["course"]))
+                except pmu.PmuErreur:
+                    continue
+            pl["conseils"] = pd.concat([frais, pd.DataFrame(nouveaux, columns=conseils_jour.columns)], ignore_index=True)
+            pl["heure"] = datetime.now(tz=pmu.PARIS).strftime("%H:%M")
+            st.rerun()
+        if retenues and b2.button(f"🔬 Approfondir avec l'IA ({len(retenues)} requêtes Gemini)", width="stretch",
+                                  help="Avis de l'IA sur chaque cheval retenu. Informatif : l'IA n'a pas prouvé "
+                                       "qu'elle faisait mieux que les cotes, elle ne change pas le pari."):
+            with st.spinner("Analyse par l'IA..."):
+                for r in retenues:
+                    try:
+                        df_c = partants_pmu(date.today(), int(r["reunion"]), int(r["numero"]))
+                        pl["ia"][r["course"]] = avis_ia(r, df_c, profil)
+                    except tl.GeminiErreur as e:
+                        pl["ia"][r["course"]] = f"IA indisponible ({e})"
+                        break
+                    except (pmu.PmuErreur, ValueError, KeyError, TypeError):
+                        pl["ia"][r["course"]] = "analyse impossible"
+            st.rerun()
+        with st.expander("Toutes les courses avec un Placé intéressant"):
+            if conseils_jour.empty:
+                st.caption("Aucune.")
+            else:
+                st.dataframe(conseils_jour.drop(columns=["reunion", "numero", "libelle", "gain_regle"]),
+                             hide_index=True, width="stretch", column_config={
+                                 "proba_corrigee": st.column_config.NumberColumn("Chances placé", format="percent"),
+                                 "valeur": st.column_config.NumberColumn("Valeur", format="percent")})
+
 with onglet_histo:
     if message_sheets:
         st.warning(message_sheets)
@@ -811,6 +938,10 @@ with onglet_histo:
         else:
             st.warning(f"Sur {bilan['n']} conseils réels, le rendement est négatif : la règle ne marche pas "
                        "(ou plus). Ne misez pas.")
+    jokers = place.stats_suivi(suivi, "confirmée", outsiders=True)
+    if jokers["n"]:
+        st.caption(f"🃏 Outsiders (cote Gagnant ≥ 8) parmi les conseils : {jokers['n']} réglés, placés "
+                   f"{jokers['places']:.0%}, rendement {jokers['rendement'] * 100:+.1f} %.")
     if essai["n"]:
         st.caption(f"🧪 Règle corrigée (en essai) : {essai['n']} conseils réglés, placés {essai['places']:.0%}, "
                    f"rendement {essai['rendement'] * 100:+.1f} % pour 1 € par conseil.")

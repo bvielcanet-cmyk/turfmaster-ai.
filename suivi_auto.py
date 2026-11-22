@@ -13,6 +13,10 @@ Configuration (variables d'environnement, à mettre dans les secrets du dépôt 
   TELEGRAM_BOT_TOKEN  : jeton du bot Telegram (facultatif)
   TELEGRAM_CHAT_ID    : identifiant de la conversation Telegram (facultatif)
   CAPITAL, PROFIL     : pour la mise affichée (par défaut 1000 et Équilibré)
+  BUDGET, JOKER       : budget du plan du jour (50 € par défaut) et joker outsider (« oui » pour l'ajouter)
+
+Entre 11 h 00 et 11 h 09, un résumé du « plan du jour » (3 meilleures courses, budget réparti selon
+le profil) est aussi envoyé sur Telegram.
 
 Sans GSHEETS_CREDENTIALS, le script tourne « à sec » : il affiche les conseils sans rien enregistrer.
 """
@@ -27,6 +31,7 @@ import requests
 
 import mesure
 import place
+import plan
 import pmu
 
 FEUILLE = "ConseilsPlace"
@@ -169,6 +174,14 @@ def message_bilan(regles, suivi):
     return "🏁 <b>Résultats</b>\n" + "\n".join(lignes) + resume
 
 
+def plan_du_jour(maintenant, profil):
+    budget = float(os.environ.get("BUDGET", 50))
+    conseils, vus = plan.cribler(maintenant.date(), maintenant, pause=0.3)
+    selection, jok = plan.composer(conseils, budget, profil,
+                                   os.environ.get("JOKER", "").lower() in ("oui", "1", "true"))
+    return plan.texte_plan(selection, budget, profil, vus, jok)
+
+
 def main():
     maintenant = datetime.now(tz=pmu.PARIS)
     capital = float(os.environ.get("CAPITAL", 1000))
@@ -179,6 +192,8 @@ def main():
     suivi = lire(feuille)
     suivi, messages = relever_conseils(suivi, maintenant, capital, profil)
     suivi, regles = regler_attente(suivi)
+    if maintenant.hour == 11 and maintenant.minute < 10:
+        messages.insert(0, plan_du_jour(maintenant, profil))
     if messages or regles:
         ecrire(feuille, suivi)
     for m in messages:

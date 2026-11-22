@@ -97,6 +97,36 @@ temps. Au-delà de 1,5 % du capital par conseil, les baisses deviennent brutales
 
 Les chances de placé affichées utilisent la formule corrigée, plus réaliste.
 
+### 📅 Plan du jour
+
+L'onglet **📅 Plan du jour** passe au crible **toutes les courses françaises à venir** (environ
+60, en 30 secondes, **sans aucune requête Gemini**) avec la règle Placé, retient les **3 plus
+prometteuses** et répartit un **budget de 20 à 100 €** selon le profil :
+
+| Profil | Paris retenus | Part max. par pari |
+|---|---|---|
+| Prudent | Placés à forte chance (≥ 45 % de placé, estimation corrigée) | 40 % |
+| Équilibré | les 3 meilleurs Placés de la règle confirmée | 50 % |
+| Offensif | idem + règle corrigée (en essai) | 60 % |
+
+- Seuls les chevaux de **cote Gagnant < 8** entrent dans le plan principal : c'est là que la règle a
+  fait ses preuves (cote 1-4 : +14 %, intervalle à 90 % +4 à +23 % ; 4-8 : +20 %). Classement par
+  critère de Kelly (chances × rapport, sans privilégier les paris trop risqués).
+- Mises au prorata de la valeur, arrondies à 0,50 € inférieur, au moins 2 € (mise de base du PMU),
+  **jamais au-delà du budget** ni des pertes encore autorisées. On ne force pas un pari pour « tout
+  jouer » : certains jours, il y aura moins de 3 paris, ou aucun.
+- **🃏 Joker outsider** (option) : 10 % du budget sur le meilleur outsider (cote Gagnant ≥ 8) qui
+  passe la règle Placé. **Non prouvé** : sur 58 conseils passés de ce type, résultats très variables
+  (de 0 % à +112 % selon la tranche, marges d'erreur énormes). Ses résultats sont suivis à part.
+- **🔄 Actualiser les cotes** des courses retenues, et **🔬 Approfondir avec l'IA** (1 requête Gemini
+  par course) : avis informatif de l'IA sur chaque cheval retenu, qui ne change pas le pari.
+- **Le plan est provisoire** : les cotes du Placé bougent beaucoup dans la journée. Reconfirmez
+  chaque pari 5 à 10 minutes avant le départ (la cote Placé minimale doit rester au-dessus du seuil
+  indiqué) ; les alertes Telegram le font automatiquement.
+
+Le suivi automatique envoie aussi un **résumé du plan sur Telegram vers 11 h** (variables GitHub
+facultatives : `BUDGET`, 50 € par défaut, et `JOKER` = `oui` pour l'inclure).
+
 ### 🤖 Suivi automatique et alertes Telegram
 
 Le fichier `.github/workflows/suivi.yml` lance `suivi_auto.py` **toutes les 10 minutes de 10 h à
@@ -282,4 +312,5 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 - `mesure.py` : enregistrement des analyses, précision de l'IA face aux cotes
 - `place.py` : conseil Simple Placé (formule de Harville), suivi à blanc
 - `suivi_auto.py` : relevé automatique des conseils Placé et alertes Telegram (GitHub Actions)
+- `plan.py` : plan du jour (crible, sélection, répartition du budget, joker)
 - `tests/` : tests automatiques
