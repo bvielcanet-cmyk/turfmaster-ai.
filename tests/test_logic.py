@@ -28,22 +28,6 @@ def test_lignes_ignorees():
     assert ignorees == ["--- divers ---", "(12) 5a", "7 3a 4a"]
 
 
-def test_stats():
-    df = pd.DataFrame([
-        {"mise": 20, "resultat": "Gagné", "gain_reel": 50},
-        {"mise": 20, "resultat": "Perdu", "gain_reel": 0},
-        {"mise": 20, "resultat": "En attente", "gain_reel": 0},
-    ])
-    s = tl.calculer_stats(df)
-    assert s["nb_tickets"] == 3 and s["nb_resolus"] == 2
-    assert s["reussite"] == 50
-    assert s["benefice"] == 10 and s["roi"] == 25
-
-
-def test_stats_vide():
-    assert tl.calculer_stats(pd.DataFrame(columns=tl.COLONNES_HISTORIQUE))["roi"] == 0
-
-
 DONNEES = __import__("pathlib").Path(__file__).parent / "donnees"
 
 
@@ -70,7 +54,7 @@ def test_copier_coller_texte_avant_et_fiche_sans_nom():
     assert ignorees == ["Prix de Paris", "N° 2 (nom introuvable)"]
 
 
-# --- Discipline, valeur, décision -------------------------------------------
+# --- Discipline et chances -------------------------------------------
 
 def site():
     return tl.extraire_data_pro((DONNEES / "partants_site.txt").read_text())[0]
@@ -89,55 +73,12 @@ def test_probas_marche():
     assert tl.probas_marche(tl.extraire_data_pro("1 A 2.5\n2 B")[0]) is None
 
 
-def chevaux(**p):
-    base = {"5": .40, "4": .20, "1": .15, "3": .10, "6": .05, "7": .05, "2": .05}
-    base.update(p)
-    return [{"num": n, "p": v} for n, v in base.items()]
-
-
-def test_pas_de_pari_sans_cotes():
-    df = tl.extraire_data_pro("1 A 1a 2.5\n2 B 3a")[0]
-    d = tl.evaluer_pari([{"num": "1", "p": .6}, {"num": "2", "p": .4}], df, 1000, "Offensif")
-    assert not d["jouer"] and "Cote manquante (n° 2)" in d["raison"]
-
-
-def test_pas_de_pari_si_ia_suit_le_marche():
-    m = tl.probas_marche(site())
-    d = tl.evaluer_pari([{"num": n, "p": q} for n, q in m.items()], site(), 1000, "Offensif")
-    assert not d["jouer"] and "Aucun cheval n'est assez intéressant" in d["raison"] and d["detail"]
-
-
-def test_outsider_tres_cote_jamais_joue():
-    # L'IA donne 5 % à un cheval à 53.6 : gain espéré énorme sur le papier, mais cote hors profil
-    d = tl.evaluer_pari(chevaux(), site(), 1000, "Offensif")
-    assert d["pari"] is None or d["pari"]["num"] != "2"
-
-
-def test_pari_conseille_avec_mise_plafonnee():
-    ch = chevaux(**{"5": .45, "4": .25, "1": .12, "3": .08, "6": .05, "7": .03, "2": .02})
-    d = tl.evaluer_pari(ch, site(), 1000, "Équilibré")
-    assert d["jouer"] and d["pari"]["num"] == "4" and d["pari"]["cote"] == 5.8
-    assert d["pari"]["gain_espere"] >= tl.PROFILS["Équilibré"]["ev_min"]
-    assert 0 < d["pari"]["mise"] <= 20  # plafond 2 % de 1000 €
-    assert not tl.evaluer_pari(ch, site(), 1000, "Prudent")["jouer"]  # cote 5.8 > 4
-
-
-def test_limite_de_pertes():
-    ch = chevaux(**{"5": .45, "4": .25, "1": .12, "3": .08, "6": .05, "7": .03, "2": .02})
-    assert tl.evaluer_pari(ch, site(), 1000, "Offensif", budget_restant=5)["pari"]["mise"] == 5
-    d = tl.evaluer_pari(ch, site(), 1000, "Offensif", budget_restant=0)
-    assert not d["jouer"] and "Limite de pertes" in d["raison"]
-
-
-def test_pertes_recentes():
-    maintenant = pd.Timestamp("2026-11-20 12:00")
-    h = pd.DataFrame([
-        {"date": "2026-11-19 10:00", "mise": 20, "gain_reel": 0, "resultat": "Perdu"},
-        {"date": "2026-11-18 10:00", "mise": 10, "gain_reel": 25, "resultat": "Gagné"},
-        {"date": "2026-11-20 09:00", "mise": 8, "gain_reel": 0, "resultat": "En attente"},
-        {"date": "2026-11-01 10:00", "mise": 500, "gain_reel": 0, "resultat": "Perdu"},
-    ])
-    assert tl.pertes_recentes(h, maintenant) == 13  # 20 + 10 + 8 − 25, l'ancien ticket est exclu
+def test_comparer_chances():
+    t = tl.comparer_chances([{"num": "4", "p": .6}, {"num": "5", "p": .4}], site())
+    assert list(t["num"])[:2] == ["4", "5"] and len(t) == 7
+    assert abs(t["proba_marche"].sum() - 1) < 1e-9 and set(t.columns) == {"num", "nom", "cote", "proba_ia", "proba_marche"}
+    sans = tl.comparer_chances([{"num": "1", "p": 1.0}], tl.extraire_data_pro("1 A 2.5\n2 B 3a")[0])
+    assert sans["proba_marche"].isna().all()
 
 
 def test_valider_reponse():
@@ -145,29 +86,25 @@ def test_valider_reponse():
     res, alertes = tl.valider_reponse({
         "m": "☀️", "chevaux": [{"num": "5", "p": 50, "out": False}, {"num": "4", "p": "30%", "out": True},
                               {"num": "12", "p": 10}, {"num": "7", "p": 20, "out": True}, {"num": "5", "p": 5}],
-        "pari_nom": "Trio", "pari_nums": "5 - 4 - 7"}, df)
+        }, df)
     assert [c["num"] for c in res["chevaux"]] == ["5", "4", "7"]
     assert abs(sum(c["p"] for c in res["chevaux"]) - 1) < 1e-9  # 50+30+20 = 100 %
     assert [c["out"] for c in res["chevaux"]] == [False, True, False]  # un seul outsider
     assert res["chevaux"][0]["nom"] == "LOKI DE LA BRUNIE"
     assert alertes == ["Gemini a cité le n° 12, qui n'est pas au départ : ignoré."]
-    assert res["combine"] == {"nom": "Trio", "nums": "5 - 4 - 7"}
 
 
-def test_valider_reponse_combine_invalide_et_refus():
-    res, alertes = tl.valider_reponse({"chevaux": [{"num": "5", "p": 60}], "pari_nom": "Trio",
-                                       "pari_nums": "5 - 14"}, site())
-    assert res["combine"] is None and "14" in alertes[0]
+def test_reponse_inutilisable():
     for mauvais in [{}, {"chevaux": []}, {"chevaux": [{"num": "99", "p": 10}]}, {"chevaux": "x"}]:
         with pytest.raises(ValueError):
             tl.valider_reponse(mauvais, site())
 
 
-def test_prompt():
-    p = tl.construire_prompt("1 - A (F | 1a)", "Auteuil", "Obstacles", "Prudent", "Soleil, terrain souple")
-    assert "Simple Placé" in p and "Soleil, terrain souple" in p and "CHAQUE partant" in p
-    assert "❔" in tl.construire_prompt("x", "Auteuil", "Obstacles", "Offensif", "AUCUNE DONNÉE")
-
+def test_prompt_sans_conseil_de_pari():
+    p = tl.construire_prompt("1 - A (F | 1a)", "Auteuil", "Obstacles", "Soleil, terrain souple")
+    assert "Soleil, terrain souple" in p and "CHAQUE partant" in p
+    assert "pari_nom" not in p and "mise" not in p.lower().replace("mission", "")
+    assert "❔" in tl.construire_prompt("x", "Auteuil", "Obstacles", "AUCUNE DONNÉE")
 
 
 # --- Pronostics publiés ------------------------------------------------------

@@ -1,23 +1,134 @@
-# TurfMaster
+# TurfMaster : aide à la décision
 
-Application Streamlit qui analyse une liste de partants avec Gemini et ne conseille un pari
-**que lorsque son intérêt est mesurable** par rapport à votre profil de risque.
+Application Streamlit qui aide à **comprendre une course** (qui a des chances, à quel point elle est
+ouverte) et propose un **one-shot** ponctuel, sur une ou deux courses, en montrant
+**ce qu'on peut gagner et perdre**. Le conseil désigne le pari le plus probable, pas un pari rentable.
 
-> Les probabilités sont des estimations de l'IA, pas une garantie. L'onglet **Historique**
-> permet de vérifier, course après course, si les pronostics rapportent vraiment.
+> **Aucun avantage sur les autres parieurs n'a été démontré.** Ne misez que ce que vous acceptez de
+> perdre. Joueurs Info Service : 09 74 75 13 13 (appel non surtaxé).
+
+## ⚠️ Correction du 22/11/2026 : les anciens résultats étaient faux
+
+Les versions précédentes annonçaient un Simple Placé gagnant (+22 %, +11 %), une règle corrigée, des
+simulations de mises, une protection du capital et un mode « one shot ». **Tout cela est retiré.**
+
+Ces tests choisissaient les paris avec les cotes que le PMU renvoie pour une course terminée. Elles
+étaient présentées comme « au départ » : ce sont les cotes de **clôture, publiées après le départ**.
+Les paris testés étaient donc impossibles à jouer.
+
+**Règle pour toute étude future : une donnée qui sert à choisir un pari doit être horodatée avant
+le départ.** Les rapports officiels ne servent qu'au règlement.
+
+## Ce que montre le test refait sans tricher
+
+2 342 courses PMU du 22/09 au 20/11/2026, dont **1 774 retenues** : celles où chaque partant avait une
+cote horodatée au moins 10 minutes avant le départ (30 en médiane). Les 568 autres, souvent de petites
+réunions, ne sont pas couvertes. Seuils des feux et paris testés fixés avant de lire ces données.
+
+| Favori | Courses | Gagne (calcul) | Gagne (réel) | Placé (calcul) | Placé (réel) | Trio désordre (réel, 8+ partants) |
+|---|--:|--:|--:|--:|--:|--:|
+| 🟢 claire | 481 | 47,4 % | 41,4 % | 78,2 % | 70,3 % | 12,5 % |
+| 🟠 disputée | 709 | 27,6 % | 26,9 % | 58,6 % | 58,3 % | 6,7 % |
+| 🔴 très ouverte | 584 | 17,9 % | 19,9 % | 43,1 % | 40,9 % | 4,5 % |
+
+Le feu distingue bien les courses lisibles des courses ouvertes. Le calcul surestime les favoris des
+courses claires, et sous-estime le trio des trois préférés : l'application corrige les deux.
+
+**Paris sur les chevaux préférés, 1 € par pari, rapports officiels :**
+
+| Pari | Courses | Passe | Résultat | Intervalle à 90 % |
+|---|--:|--:|--:|--:|
+| Simple Placé | 1 774 | 56 % | −11,3 % | −14 à −8 % |
+| Simple Gagnant | 1 774 | 29 % | −15,1 % | −21 à −9 % |
+| Couplé Placé | 1 598 | 25 % | −15,6 % | −23 à −9 % |
+| Couplé Gagnant | 1 598 | 13 % | −16,7 % | −27 à −5 % |
+| 2 sur 4 | 1 311 | 31 % | −22,4 % | −28 à −16 % |
+| Trio | 1 530 | 7 % | −27,8 % | −42 à −13 % |
+| Couplé Ordre | 176 | 11 % | −46,8 % | −67 à −26 % |
+| Super 4 | 423 | 2 % | −55,6 % | −86 à −16 % |
+| Trio Ordre | 175 | 5 % | −61,4 % | −83 à −37 % |
+
+Par couleur de feu, **aucun pari ne gagne de façon fiable** sur les deux périodes (sept.-oct. et
+novembre). Seule case positive sur l'ensemble : le Super 4 des courses rouges, 36 courses et un seul
+pari gagnant, donc du hasard. Multi et Tiercé ne figurent pas dans ce tableau (voir les pronostics à plus de
+30 %). Quarté+, Quinté+ et Pick 5 ne sont pas testés, ni les sélections autres que les chevaux préférés.
 
 ## Utilisation
 
-**Le plus simple : 📅 Programme PMU.** Choisissez le jour et la course : partants, cotes PMU du
-moment, hippodrome et discipline sont chargés automatiquement. Le copier-coller reste disponible
-(📋), par exemple si le site du PMU ne répond pas.
+- **🏇 La course** : le feu, le podium estimé d'après les cotes, le risque d'un pari que vous
+  choisissez et, sur demande, l'avis de l'IA et de la presse. Tout est gratuit sauf cet avis.
+- **🎯 One-shot** : le ticket du jour, sur une ou deux courses, sans requête Gemini.
+- **📒 Mon carnet** : les paris réellement joués, leur résultat net et la comparaison IA / cotes.
+
+| Feu | Chances du favori de gagner | Sens |
+|---|---|---|
+| 🟢 Estimation fiable | au moins 35 % | favori placé 7 fois sur 10 |
+| 🟠 Estimation correcte | de 22 à 35 % | favori placé 6 fois sur 10 |
+| 🔴 Peu fiable : ne pas jouer | moins de 22 % | favori placé 4 fois sur 10 |
+
+**« Fiable » parle de l'estimation, jamais du gain. Un feu vert ne veut pas dire « rentable »** : il mesure le suspense, pas la rentabilité.
+
+### 🎯 Le one-shot
+
+L'application sert à jouer **ponctuellement, pour s'amuser** : 20 ou 50 € sur une ou deux courses. Elle choisit
+la course où le favori a le plus de chances d'être placé (jamais une 🔴, ni un favori coté moins de 1,5 : il
+n'y aurait presque rien à gagner). On peut aussi choisir sa course.
+Pour un doublé, la 2e course part au moins 20 minutes après la 1re, pour rejouer tout ce qu'elle a rapporté.
+
+| Façon de jouer | Pari | Fini en gain | Gain habituel si ça passe | Moyenne des mises | Cas |
+|---|---|--:|--:|--:|--:|
+| 🛡️ Tranquille | 1 Placé | 72,8 % | +30 % | −4,6 % | 180 |
+| 🚀 Gros coup | 1 Gagnant | 44,4 % | +100 % | −7,2 % | 180 |
+| 🎢 Doublé | 2 Placés enchaînés | 54,5 % | +68 % | −7,8 % | 165 |
+| 💥 Jackpot | 2 Gagnants enchaînés | 22,4 % | +320 % | −1,1 % (de −25 à +24 %) | 165 |
+
+Mesuré du 22/09 au 20/11/2026 sur les 3 courses les plus sûres de chaque jour (et leurs paires), cotes connues
+au moins 10 minutes avant le départ, rapports officiels. Novembre a été moins bon : 63 %, 40 %, 46 % et 19 %
+de cas en gain. **Aucune façon n'est rentable de façon fiable : on choisit combien on peut gagner contre quel
+risque de tout perdre.**
+
+Un seul one-shot noté par jour, dans le budget des 7 jours (50 € par défaut). Le carnet règle un doublé comme
+un seul pari, aux rapports officiels. Une grosse mise sur une petite course peut faire baisser le rapport.
+
+**Plafonds d'affichage** : 75 % pour un cheval placé, 50 % pour un gagnant. Au-delà, le calcul promettait plus
+que la réalité. Ils ont été fixés après avoir vu les 60 jours : pas de confirmation indépendante.
+
+### Météo, hippodrome, terrain, historique : testés, non retenus
+
+Sur 1 126 courses, en n'apprenant que sur les jours précédents, chacune de ces informations ajoutée aux cotes
+d'avant départ a rendu la prévision légèrement **moins bonne** (hippodrome, état de piste, météo, 5 dernières
+courses de chaque cheval), et toutes ensemble nettement moins bonne. Seules des cotes plus tardives
+l'améliorent : d'où le rappel d'actualiser 10 minutes avant le départ.
+
+### Pronostics à plus de 30 %
+
+Chance que les chevaux préférés des parieurs fassent passer chaque pari. Une correction a été apprise
+sur sept.-oct. et gardée seulement si elle prévoyait mieux novembre. Cas passés au-dessus de 30 % :
+
+| Pari | Cas | Annoncé | Réel | Résultat | Intervalle à 90 % |
+|---|--:|--:|--:|--:|--:|
+| Simple Placé | 1 766 | 55,9 % | 56,2 % | −10,9 % | −14 à −8 % |
+| Simple Gagnant | 641 | 39,5 % | 39,2 % | −12,7 % | −20 à −5 % |
+| Couplé Placé | 423 | 39,7 % | 40,4 % | −1,7 % | −12 à +9 % |
+| 2 sur 4 | 694 | 41,7 % | 37,8 % | −19,8 % | −27 à −13 % |
+| Mini Multi en 6 | 117 | 36,9 % | 36,8 % | −20,4 % | −40 à +1 % |
+| Couplé Gagnant | 46 | 36,9 % | 32,6 % | −16,1 % | −48 à +18 % |
+| Multi en 7 | 33 | 35,1 % | 57,6 % | +18,8 % | −23 à +67 % |
+
+La colonne « annoncé / réel » mélange la période d'apprentissage et novembre. Aucun pari n'est rentable
+de façon fiable ; le Multi en 7 a trop peu de cas pour conclure. Trio, Mini Multi en 5 et Multi en 6
+dépassent rarement 30 % (10 cas ou moins). Couplé Ordre, Trio Ordre, Super 4, Tiercé, Multi en 4 ou 5 et
+Mini Multi en 4 ne les ont jamais dépassés. Quarté+, Quinté+ et Pick 5 ne sont pas calculés.
+
+Le **budget sur 7 jours** (barre latérale, à régler à chaque visite) compte tout ce qui a été misé :
+un gain ne l'agrandit pas. C'est un avertissement, pas un blocage.
 
 > Les données viennent du site du PMU. Ce n'est pas une interface officiellement ouverte au
 > public : elle peut changer sans prévenir. L'application l'interroge avec modération.
 
 Pour le copier-coller :
 
-1. Dans la barre latérale : hippodrome, discipline, capital et profil de risque.
+1. Choisissez **📋 Copier-coller** et indiquez l'hippodrome.
 2. Collez les partants. Deux formats sont acceptés :
 
    - **le copier-coller du tableau des partants d'un site de courses**, tel quel (numéro seul,
@@ -43,187 +154,12 @@ Pour le copier-coller :
    Les lignes non reconnues sont signalées. La cote (avec un point ou une virgule) est facultative.
    La discipline est devinée d'après la musique (`a`/`m` trot, `p` plat, `h`/`s`/`c` obstacles)
    si elle est sur « Auto ».
-3. Cliquez sur **⚡ ANALYSER LA COURSE**. Si un pari est conseillé, **💾 Enregistrer le ticket**.
-4. Après la course, dans **📊 Historique**, indiquez *Gagné* ou *Perdu* et la somme rapportée.
+3. Le feu et le podium s'affichent dès que chaque partant a une cote.
 
-### 🎯 Conseil Placé (gratuit, sans IA)
+### Avis de l'IA
 
-Pour une course du programme PMU, le bouton **🎯 CONSEIL PLACÉ** compare les chances de chaque cheval
-de finir placé (déduites des cotes du Simple Gagnant par la formule de Harville) aux **cotes
-probables du Simple Placé** publiées par le PMU. Quand un Placé paie plus que ses chances ne le
-justifient (gain espéré ≥ +10 %, cote probable minimale ≤ 20), il est conseillé. Aucune requête
-Gemini n'est utilisée.
-
-**Test sur des courses passées** (règle fixée avant le test de confirmation, 1 € par conseil,
-rapports officiels) :
-
-| Période | Courses | Conseils | Placés | Rendement |
-|---|---|---|---|---|
-| 22/09 → 31/10/2026 (confirmation) | 1 189 | 299 | 50,5 % | **+22 %** (intervalle à 90 % : +6 % à +40 %) |
-| 01/11 → 20/11/2026 | 728 | 180 | 48,9 % | +11 % |
-
-Ce décalage entre les paris Gagnant et Placé est un phénomène connu des paris mutuels. Mais ce
-sont des **résultats passés** : les cotes bougent jusqu'au départ (jouer dans les dernières minutes,
-seulement si la cote minimale reste au-dessus du seuil indiqué), et les chances de placé calculées
-sont optimistes (62 % prévus, 50 % réels). D'où une **mise fixe** (0,5 / 1 / 1,5 % du capital selon
-le profil) plutôt qu'un dosage de Kelly.
-
-**Suivi à blanc** : chaque conseil donné sur une course à venir est enregistré (onglet
-`ConseilsPlace`) et réglé au rapport officiel par « Récupérer les arrivées ». L'Historique affiche
-le bilan réel. **Attendez au moins 100 conseils réglés avec un rendement positif avant de miser.**
-
-#### Choisir sa mise : les séries de pertes
-
-Simulation (20 000 tirages) de 300 conseils, à partir des 479 résultats réels passés, en supposant
-que le rendement passé se maintient :
-
-| Mise par conseil | Capital médian (départ 100) | Fini en perte | Baisse en cours de route > 20 % | > 40 % |
-|---|---|---|---|---|
-| 0,5 % (Prudent) | 128 | 4 % | 0 % | 0 % |
-| 1 % (Équilibré) | 162 | 4 % | 17 % | 0 % |
-| 1,5 % (Offensif) | 200 | 5 % | 57 % | 2 % |
-| 3 % | 338 | 7 % | 100 % | 45 % |
-
-Environ un conseil sur deux est perdu, et il faut s'attendre à **7 pertes d'affilée** de temps en
-temps. Au-delà de 1,5 % du capital par conseil, les baisses deviennent brutales.
-
-#### Deux règles suivies en parallèle
-
-- **Règle confirmée** (celle qui est conseillée) : formule de Harville classique.
-- **Règle corrigée** (en essai, relevée seulement par le suivi automatique) : formule de Harville
-  corrigée (coefficients 0,81 et 0,65 appris sur 1 195 courses), mieux calibrée. Sur les courses
-  passées : moins de conseils, plus rarement placés mais mieux payés (+37 % puis +15 %). Elle n'a
-  pas eu de test de confirmation : le suivi réel départagera les deux.
-
-Les chances de placé affichées utilisent la formule corrigée, plus réaliste.
-
-#### 🛡️ Protection automatique des mises
-
-Les mises sont un pourcentage du **capital actuel** (capital de départ + résultats des tickets joués,
-ou du suivi à blanc tant que vous ne jouez pas). **Dès que le capital est à plus de 15 % sous son plus
-haut, toutes les mises sont divisées par deux** (conseil Placé, plan du jour, alertes Telegram),
-jusqu'à ce qu'il remonte au-dessus de ce seuil.
-
-Comparaison sur les 479 conseils Placé passés (cote Gagnant < 8, capital de départ 100) :
-
-| Stratégie | Capital final | Pire baisse réelle | Risque de baisse > 20 % |
-|---|---|---|---|
-| 1 % fixe | 184 | 15 % | 9 % |
-| **1 % + réduction après −15 %** | **184** | 15 % | **3 %** |
-| 2 % + réduction | 290 | 22 % | 65 % |
-| Kelly (0,5 à 3 %) | 471 | 35 % | 83 % |
-
-La protection garde le gain et coupe les grosses chutes. Miser plus gros (ou selon Kelly) multiplie
-le gain **et** les chutes, et suppose des probabilités exactes alors que ce ne sont que des
-estimations. Ne cherchez jamais à « vous refaire » en augmentant les mises après des pertes.
-
-### 📅 Plan du jour
-
-L'onglet **📅 Plan du jour** passe au crible **toutes les courses françaises à venir** (environ
-60, en 30 secondes, **sans aucune requête Gemini**) avec la règle Placé, retient les **3 plus
-prometteuses** et répartit un **budget de 20 à 100 €** selon le profil :
-
-| Profil | Paris retenus | Part max. par pari |
-|---|---|---|
-| Prudent | Placés à forte chance (≥ 45 % de placé, estimation corrigée) | 40 % |
-| Équilibré | les 3 meilleurs Placés de la règle confirmée | 50 % |
-| Offensif | idem + règle corrigée (en essai) | 60 % |
-
-- Seuls les chevaux de **cote Gagnant < 8** entrent dans le plan principal : c'est là que la règle a
-  fait ses preuves (cote 1-4 : +14 %, intervalle à 90 % +4 à +23 % ; 4-8 : +20 %). Classement par
-  critère de Kelly (chances × rapport, sans privilégier les paris trop risqués).
-- Mises au prorata de la valeur, arrondies à 0,50 € inférieur, au moins 2 € (mise de base du PMU),
-  **jamais au-delà du budget** ni des pertes encore autorisées. On ne force pas un pari pour « tout
-  jouer » : certains jours, il y aura moins de 3 paris, ou aucun.
-- **🃏 Joker outsider** (option) : 10 % du budget sur le meilleur outsider (cote Gagnant ≥ 8) qui
-  passe la règle Placé. **Non prouvé** : sur 58 conseils passés de ce type, résultats très variables
-  (de 0 % à +112 % selon la tranche, marges d'erreur énormes). Ses résultats sont suivis à part.
-- **🔄 Actualiser les cotes** des courses retenues, et **🔬 Approfondir avec l'IA** (1 requête Gemini
-  par course) : avis informatif de l'IA sur chaque cheval retenu, qui ne change pas le pari.
-- **Le plan est provisoire** : les cotes du Placé bougent beaucoup dans la journée. Reconfirmez
-  chaque pari 5 à 10 minutes avant le départ (la cote Placé minimale doit rester au-dessus du seuil
-  indiqué) ; les alertes Telegram le font automatiquement.
-
-Le suivi automatique envoie aussi un **résumé du plan sur Telegram vers 11 h** (variables GitHub
-facultatives : `BUDGET`, 50 € par défaut, et `JOKER` = `oui` pour l'inclure).
-
-#### 🎯 Mode « one shot » (par défaut)
-
-Le budget de 20 à 100 € est **joué une seule fois**, sans lien avec un capital : vous acceptez de le
-perdre. Prudent et Équilibré : 3 Placés ; Offensif : 2.
-
-- **Répartition optimisée** : les mises sont réparties pour **maximiser les chances de finir en
-  gain** (plus sur le Placé le plus sûr), au lieu de parts égales. Sur 15 000 plans passés de 3
-  Placés : 68 % finis en gain au lieu de 56 %, au même risque de tout perdre (10 %).
-- **Feu tricolore**, selon le risque de tout perdre (calculé puis corrigé : le calcul brut est trop
-  optimiste, réel ≈ 1,3 à 1,4 × calculé ; correction apprise sur sept.-oct., vérifiée sur novembre) :
-  🟢 **jeu possible** (≤ 10 %), 🟠 **risque élevé** (≤ 25 %, à vous de décider), 🔴 **ne pas jouer
-  aujourd'hui** (au-delà, ou moins de 2 Placés intéressants).
-- Les chances de finir en gain ne sont pas annoncées plan par plan (le calcul ne distingue pas
-  fiablement les bons plans des autres) : sur un feu vert, la moyenne observée est d'environ
-  **2 sur 3**.
-- Même au feu vert, environ 1 plan sur 12 perd tout et un tiers finissent en perte.
-
-Le mode **📈 Dans la durée** garde le fonctionnement précédent (mises selon le capital et sa protection).
-
-### 🤖 Suivi automatique et alertes Telegram
-
-Le fichier `.github/workflows/suivi.yml` lance `suivi_auto.py` **toutes les 10 minutes de 10 h à
-minuit** (GitHub peut retarder de quelques minutes). À chaque passage :
-
-1. pour chaque course française qui part **dans 3 à 20 minutes**, le conseil Placé (règle confirmée
-   et règle corrigée) est enregistré dans l'onglet `ConseilsPlace` du Google Sheet et envoyé sur
-   **Telegram** ;
-2. les conseils dont la course est terminée sont réglés au rapport officiel, avec un
-   récapitulatif Telegram.
-
-Le suivi à blanc avance ainsi sans intervention (environ 100 conseils en une semaine).
-
-**Configuration** — sur GitHub : *Settings → Secrets and variables → Actions → New repository secret* :
-
-| Secret | Valeur |
-|---|---|
-| `GSHEETS_CREDENTIALS` | tout le contenu du fichier JSON du compte de service Google |
-| `GSHEETS_URL` | l'adresse du classeur (`https://docs.google.com/spreadsheets/d/…/edit`) |
-| `TELEGRAM_BOT_TOKEN` | le jeton du bot donné par @BotFather |
-| `TELEGRAM_CHAT_ID` | l'identifiant de votre conversation avec le bot |
-
-Pour trouver `TELEGRAM_CHAT_ID` : envoyez un message à votre bot, puis ouvrez
-`https://api.telegram.org/bot<JETON>/getUpdates` et relevez le nombre après `"chat":{"id":`.
-
-Facultatif, onglet *Variables* : `CAPITAL` (1000 par défaut) et `PROFIL` (`Équilibré` par défaut)
-pour la mise indiquée dans les alertes. Sans `GSHEETS_CREDENTIALS`, le script tourne « à sec » et
-n'enregistre rien. Les secrets ne sont jamais affichés dans les journaux de GitHub.
-
-### Quand l'application conseille-t-elle de jouer ?
-
-Un pari n'est conseillé que si son intérêt peut être **mesuré** :
-
-1. **Il faut la cote de chaque partant.** Sinon : « 🚫 Pas de pari », cote manquante.
-2. **Probabilité retenue** = moyenne entre l'estimation de l'IA et celle des cotes (marge des
-   opérateurs retirée). L'IA peut se tromper, surtout sur les petites probabilités : on ne lui
-   fait confiance qu'à moitié.
-3. **Gain espéré** pour 1 € misé en Simple Gagnant = probabilité retenue × cote − 1.
-4. Le pari est conseillé seulement si **toutes** les conditions du profil sont remplies :
-
-| Profil | Gain espéré | Probabilité | Cote | Mise maximale |
-|---|---|---|---|---|
-| Prudent | ≥ +10 % | ≥ 30 % | ≤ 4 | 1 % du capital |
-| Équilibré | ≥ +8 % | ≥ 15 % | ≤ 10 | 2 % du capital |
-| Offensif | ≥ +5 % | ≥ 8 % | ≤ 20 | 4 % du capital |
-
-5. **Mise** = fraction du critère de Kelly (¼ en Prudent et Équilibré, ½ en Offensif),
-   plafonnée comme ci-dessus : plus l'écart avec les cotes est grand, plus la mise l'est.
-6. **Limite de pertes** sur 7 jours (100 € par défaut, réglable) : la mise est réduite puis
-   bloquée quand elle est atteinte. Les tickets en attente comptent. Nécessite l'historique.
-
-Les cotes bougent jusqu'au départ : l'application indique la **cote minimale** en dessous de
-laquelle le pari n'a plus de valeur.
-
-Les paris combinés (Trio, Couplé…) proposés par l'IA sont affichés comme idée, **sans mise** :
-leur gain ne peut pas être mesuré sans leurs rapports.
-
-Les numéros renvoyés par Gemini sont vérifiés : un numéro absent du départ est écarté et signalé.
+Le bouton **🤖** demande un avis à Gemini, affiché à côté de celui des cotes. C'est une information :
+il ne change ni le conseil ni la mise. Les numéros inventés sont écartés et signalés.
 
 ### Pronostics de la presse
 
@@ -234,9 +170,7 @@ L'option **📰 Pronostics de la presse** cherche les pronostics publiés pour l
   citée par l'IA mais introuvable dans les pages consultées est écartée (risque d'invention) ;
 - les numéros absents du départ sont ignorés et signalés ;
 - **consensus** : 1er choix d'une source = 5 points, 2e = 4 … 5e = 1 ;
-- le consensus est transmis à l'IA comme un avis parmi d'autres, et affiché dans le verdict
-  (« cité par 3 sources sur 5 ») et le classement. **Il ne déclenche jamais un pari à lui
-  seul** : la règle de valeur mesurable reste la même.
+- le consensus est transmis à l'IA comme un avis parmi d'autres, et affiché à côté du sien.
 
 Cette recherche tourne en même temps que celle de la météo et est gardée 3 h par course.
 
@@ -252,35 +186,26 @@ faite **une fois par hippodrome et par jour** puis réutilisée : seule la premi
 réunion est plus lente. Si elle n'est pas disponible, l'analyse se fait sans et un message
 l'indique. Une même course n'est envoyée qu'une fois par heure à Gemini.
 
-### Mesurer la précision de l'IA
+### Carnet et mesure de l'IA
 
-**Chaque analyse est enregistrée**, qu'un pari soit conseillé ou non, avec les probabilités de
-l'IA et celles des cotes pour chaque partant. Dans l'onglet **📊 Historique** :
+- **🔄 Récupérer les arrivées** règle les paris aux rapports officiels du PMU. Un non-partant ou une
+  course annulée est remboursé. Aucun gain n'est estimé.
+- **📏** compare l'IA et les cotes sur les courses terminées. Cette mesure ne change rien aux affichages
+  et ne choisit aucun pari.
+- **🧪** analyse 5 courses passées (5 requêtes Gemini) sans recherche internet. Les cotes y sont celles
+  de la clôture : cela compare l'IA aux parieurs, cela ne valide aucun pari.
 
-1. **🔄 Récupérer les arrivées** : pour les courses du programme PMU, le gagnant et le rapport
-   officiel sont récupérés au PMU (sans requête Gemini). Pour les courses collées, cochez la
-   recherche Gemini (1 requête par course, résultat non officiel). Les tickets joués sont
-   remplis automatiquement (Gagné / Perdu, somme rapportée).
-2. **📏 L'IA prévoit-elle mieux que les cotes ?** L'application compare l'IA et les cotes sur
-   les courses terminées (perte logarithmique, score de Brier, part des favoris gagnants).
-3. **Réglage automatique** : à partir de **30 courses mesurées**, la part de l'IA dans la
-   probabilité retenue n'est plus fixée à 50 % mais réglée sur la valeur qui a le mieux prévu
-   les gagnants. Si les cotes font mieux, elle peut descendre jusqu'à 0 % : l'application ne
-   conseillera alors plus de paris basés sur l'avis de l'IA.
+Si un onglet Google Sheets n'a pas pu être lu, l'application refuse de le réécrire. L'ancien onglet
+`ConseilsPlace` n'est plus utilisé ; il n'est ni modifié ni supprimé.
 
-**Pour faire avancer la mesure vite** : le bouton **🧪 Tester l'IA sur 5 courses passées** analyse
-5 courses françaises des 7 derniers jours (5 requêtes Gemini), sans recherche internet pour que l'IA
-ne puisse pas trouver le résultat, et les enregistre avec leur arrivée officielle. Une course déjà
-testée n'est jamais refaite. On peut aussi analyser à la main une course terminée du programme PMU.
+### 🚦 Feux du matin sur Telegram (facultatif)
 
-**Ce qu'a montré un test sur 560 courses PMU** (7 au 20 novembre 2026) : les cotes au départ sont
-très bien calibrées (quand elles donnent 25 %, le cheval gagne environ 25 % du temps) ; les corriger
-n'apporte presque rien. En revanche, miser sur les chevaux cotés **au-delà de 20** a perdu 29 à 58 %
-de la mise, contre 8 à 16 % en dessous : la cote maximale du profil Offensif est donc de 20.
+`.github/workflows/feux.yml` envoie une fois par jour la lisibilité des courses, sans pari ni mise.
+Secrets GitHub : `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID`. Les secrets Google n'y sont pas utiles.
 
-Sans Google Sheets, analyses et tickets sont gardés dans des fichiers locaux (`donnees_locales/`) :
-sur Streamlit Cloud, ils sont **perdus à chaque redémarrage**. Configurez Google Sheets (ci-dessous)
-pour les garder. Les onglets `TurfMaster` (tickets) et `Analyses` sont créés automatiquement.
+Les lancements planifiés de GitHub **ne sont pas fiables** : l'ancienne tâche « toutes les 10 minutes »
+n'a tourné qu'une fois sur une centaine de passages prévus. Le message peut être en retard ou absent.
+*Actions → Feux du jour → Run workflow* le lance à la main.
 
 ## Configuration (Secrets)
 
@@ -317,8 +242,8 @@ auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
 client_x509_cert_url = "..."
 ```
 
-Les tickets sont rangés dans un onglet **TurfMaster**, créé automatiquement : les autres
-onglets du classeur ne sont pas touchés. `test_diag.py` permet de vérifier la connexion.
+Le carnet est rangé dans l'onglet **TurfMaster** et les analyses dans **Analyses**, créés
+automatiquement. `test_diag.py` permet de vérifier la connexion.
 
 ## Versions
 
@@ -346,11 +271,10 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 ## Organisation du code
 
 - `app.py` : interface Streamlit
-- `turf_logic.py` : lecture des partants, décision de pari, appels Gemini, statistiques
+- `decision.py` : feux, pronostics, conseil et mise, podium, risque
+- `carnet.py` : paris joués, règlement officiel, budget
+- `turf_logic.py` : lecture des partants, appels Gemini, presse
 - `pmu.py` : programme, partants, cotes, arrivées et rapports du PMU
-- `mesure.py` : enregistrement des analyses, précision de l'IA face aux cotes
-- `place.py` : conseil Simple Placé (formule de Harville), suivi à blanc
-- `suivi_auto.py` : relevé automatique des conseils Placé et alertes Telegram (GitHub Actions)
-- `plan.py` : plan du jour (crible, sélection, répartition du budget, joker)
-- `protection.py` : capital actuel et réduction des mises après une baisse
+- `mesure.py` : précision de l'IA face aux cotes
+- `feux_du_matin.py` : message Telegram du matin
 - `tests/` : tests automatiques

@@ -1,5 +1,5 @@
 """Logique de TurfMaster, sans interface : lecture des partants, appel Gemini,
-calcul de la mise et statistiques. Séparée de app.py pour pouvoir être testée."""
+comparaison de ses chances avec les cotes. Séparée de app.py pour pouvoir être testée."""
 import json
 import re
 import unicodedata
@@ -140,39 +140,7 @@ def detecter_discipline(df):
     return max(compte, key=compte.get) if compte else None
 
 
-# --- Valeur du pari et décision ------------------------------------------
-#
-# Un pari n'est conseillé que si son intérêt est MESURABLE : il faut la cote de
-# chaque partant.
-#   1. Probabilité retenue = moyenne entre l'estimation de l'IA et celle du marché
-#      (les cotes). L'IA peut se tromper, surtout sur les petites probabilités :
-#      on ne lui fait confiance qu'à moitié (CONFIANCE_IA).
-#   2. Gain espéré pour 1 € misé en Simple Gagnant = probabilité retenue × cote − 1.
-#   3. Pari conseillé seulement si le gain espéré, la probabilité et la cote
-#      respectent les seuils du profil.
-#   4. Mise = fraction du critère de Kelly, plafonnée en % du capital.
-
-CONFIANCE_IA = 0.5
-
-PROFILS = {
-    "Prudent":   {"ev_min": 0.10, "p_min": 0.30, "cote_max": 4,  "kelly": 0.25, "plafond": 0.01},
-    "Équilibré": {"ev_min": 0.08, "p_min": 0.15, "cote_max": 10, "kelly": 0.25, "plafond": 0.02},
-    # Cote max 20 : sur 560 courses PMU (7-20/11/2026), miser au-delà de 20 a perdu 29 à 58 % de la mise
-    "Offensif":  {"ev_min": 0.05, "p_min": 0.08, "cote_max": 20, "kelly": 0.50, "plafond": 0.04},
-}
-
-
-def decrire_profil(profil):
-    r = PROFILS[profil]
-    return (f"gain espéré ≥ {r['ev_min']:+.0%}, probabilité ≥ {r['p_min']:.0%}, "
-            f"cote ≤ {r['cote_max']}, mise ≤ {r['plafond']:.0%} du capital")
-
-TYPES_PARI = {
-    "Prudent": "un Simple Placé ou un Couplé Placé",
-    "Équilibré": "un Couplé Gagnant, un Trio ou un Couplé Placé",
-    "Offensif": "un Trio Ordre, un Quarté+ ou un Quinté+ (si la course le permet)",
-}
-
+# --- Chances selon les cotes et selon l'IA -----------------------------------
 
 def probas_marche(df):
     """Probabilités de victoire selon les cotes, marge des opérateurs retirée.
@@ -186,84 +154,12 @@ def probas_marche(df):
     return {num: inv / total for num, inv in inverses.items()}
 
 
-def evaluer_pari(chevaux, df, capital, profil, budget_restant=None, confiance=CONFIANCE_IA):
-    """Décide s'il faut jouer.
-
-    chevaux : sortie de valider_reponse()['chevaux'] (num, p entre 0 et 1).
-    budget_restant : pertes encore autorisées sur la période (None = pas de limite).
-    confiance : part de l'IA dans la probabilité retenue (mesurée sur l'historique, voir mesure.py).
-    Retourne {"jouer", "raison" (phrase courte), "detail", "pari", "analyse"}.
-    """
-    regles = PROFILS[profil]
-    marche = probas_marche(df)
-    ia = {c["num"]: c["p"] for c in chevaux}
-    lignes = []
-    for _, row in df.iterrows():
-        num, cote = row["NUM"], row["COTE"]
-        p = ia.get(num)
-        cote = None if pd.isna(cote) else float(cote)
-        q = marche.get(num) if marche else None
-        retenue = confiance * p + (1 - confiance) * q if (p is not None and q is not None) else None
-        lignes.append({
-            "num": num, "nom": row["NOM"], "cote": cote, "proba_ia": p, "proba_marche": q,
-            "proba_retenue": retenue,
-            "gain_espere": retenue * cote - 1 if retenue is not None else None,
-        })
-    analyse = pd.DataFrame(lignes).sort_values("proba_ia", ascending=False, na_position="last")
-    resultat = {"jouer": False, "pari": None, "analyse": analyse, "raison": None, "detail": None}
-
-    if marche is None:
-        manquantes = [str(n) for n in df.loc[df["COTE"].isna(), "NUM"]]
-        resultat["raison"] = f"Cote manquante (n° {', '.join(manquantes)})."
-        resultat["detail"] = ("Sans la cote de chaque partant, le gain ne peut pas être mesuré. "
-                              "Collez les partants avec leurs cotes.")
-        return resultat
-
-    # Chevaux compatibles avec le profil (probabilité et cote), puis seuil de gain espéré
-    compatibles = [l for l in lignes if l["gain_espere"] is not None
-                   and l["proba_retenue"] >= regles["p_min"] and l["cote"] <= regles["cote_max"]]
-    candidats = [l for l in compatibles if l["gain_espere"] >= regles["ev_min"]]
-    if not candidats:
-        meilleur = max(compatibles, key=lambda l: l["gain_espere"], default=None)
-        resultat["raison"] = f"Aucun cheval n'est assez intéressant pour le profil {profil}."
-        resultat["detail"] = (
-            f"Le meilleur, n° {meilleur['num']} {meilleur['nom']}, n'offre que "
-            f"{meilleur['gain_espere']:+.0%} de gain espéré : il faut au moins {regles['ev_min']:+.0%}."
-            if meilleur else
-            f"Aucun cheval n'a à la fois une probabilité ≥ {regles['p_min']:.0%} "
-            f"et une cote ≤ {regles['cote_max']}.")
-        return resultat
-
-    choix = max(candidats, key=lambda l: l["gain_espere"])
-    kelly = (choix["proba_retenue"] * choix["cote"] - 1) / (choix["cote"] - 1)
-    fraction = min(regles["kelly"] * kelly, regles["plafond"])
-    mise = round(max(float(capital), 0) * fraction, 2)
-    if budget_restant is not None:
-        if budget_restant <= 0:
-            resultat["raison"] = "Limite de pertes atteinte sur 7 jours."
-            resultat["detail"] = "Aucun nouveau pari tant que les pertes de la semaine n'ont pas baissé."
-            return resultat
-        mise = round(min(mise, budget_restant), 2)
-    if mise <= 0:
-        resultat["raison"] = "Capital nul : pas de mise possible."
-        resultat["detail"] = "Indiquez votre capital dans la barre latérale."
-        return resultat
-
-    resultat.update(jouer=True, raison=None, pari={**choix, "type": "Simple Gagnant", "mise": mise,
-                                                  "fraction": mise / capital if capital else 0})
-    return resultat
-
-
-def pertes_recentes(historique, maintenant, jours=7):
-    """Perte nette (mises − sommes rapportées) des tickets des `jours` derniers jours.
-    Les tickets en attente comptent leur mise : c'est de l'argent engagé."""
-    if historique is None or historique.empty:
-        return 0.0
-    dates = pd.to_datetime(historique["date"], errors="coerce", format="%Y-%m-%d %H:%M")
-    recents = historique[dates >= maintenant - pd.Timedelta(days=jours)]
-    mises = pd.to_numeric(recents["mise"], errors="coerce").fillna(0).sum()
-    gains = pd.to_numeric(recents["gain_reel"], errors="coerce").fillna(0).sum()
-    return float(mises - gains)
+def comparer_chances(chevaux, df):
+    """Par partant : chances de victoire selon l'IA et selon les cotes, côte à côte. Aucun pari n'en est tiré."""
+    ia, marche = {c["num"]: c["p"] for c in chevaux}, probas_marche(df) or {}
+    lignes = [{"num": str(r["NUM"]), "nom": r["NOM"], "cote": None if pd.isna(r["COTE"]) else float(r["COTE"]),
+               "proba_ia": ia.get(str(r["NUM"])), "proba_marche": marche.get(r["NUM"])} for _, r in df.iterrows()]
+    return pd.DataFrame(lignes).sort_values("proba_ia", ascending=False, na_position="last")
 
 
 # --- Gemini --------------------------------------------------------------
@@ -325,7 +221,7 @@ def rechercher_contexte(api_key, hippo, discipline, jour):
                              "generationConfig": {"temperature": 0.1}})
 
 
-def construire_prompt(partants_str, hippo, discipline, profil, contexte, presse=None):
+def construire_prompt(partants_str, hippo, discipline, contexte, presse=None):
     if contexte and "AUCUNE DONNÉE" not in contexte:
         bloc_contexte = f"CONTEXTE DU JOUR (recherche internet) :\n{contexte}"
     else:
@@ -348,8 +244,6 @@ MISSION :
    Fais ta propre analyse (forme, musique, poids, jockey, terrain, distance) : les cotes
    donnent l'avis des parieurs, ne te contente pas de les recopier.
 2. Mets "out": true pour au plus un outsider (cheval peu coté qui a selon toi une vraie chance).
-3. Propose une idée de pari combiné adaptée au profil {profil} : {TYPES_PARI[profil]},
-   avec UNIQUEMENT des numéros de la liste.
 
 Réponds avec un JSON de cette forme. Les valeurs entre <> sont à remplacer par TES
 estimations pour CETTE course : ne recopie aucun exemple.
@@ -358,9 +252,7 @@ estimations pour CETTE course : ne recopie aucun exemple.
     "chevaux": [
         {{"num": "<NUM>", "p": <probabilité de victoire en %>, "out": <true ou false>}},
         ... un objet par partant
-    ],
-    "pari_nom": "<type de pari combiné>",
-    "pari_nums": "<NUM> - <NUM> - ..."
+    ]
 }}
 """
 
@@ -428,17 +320,8 @@ def valider_reponse(res, df):
     for c in chevaux:
         c["out"], vu_out = (c["out"] and not vu_out), (vu_out or c["out"])
 
-    combine = None
-    nums_pari = re.findall(r'\d{1,2}', str(res.get("pari_nums", "")))
-    if res.get("pari_nom") and nums_pari:
-        inconnus = [n for n in nums_pari if str(int(n)) not in noms]
-        if inconnus:
-            alertes.append(f"Le combiné proposé contient des numéros absents ({', '.join(inconnus)}) : écarté.")
-        else:
-            combine = {"nom": str(res["pari_nom"]), "nums": " - ".join(str(int(n)) for n in nums_pari)}
-
     return {"m": str(res.get("m", "❔")), "d": str(res.get("d", "❔")), "r": str(res.get("r", "?")),
-            "chevaux": chevaux, "combine": combine}, alertes
+            "chevaux": chevaux}, alertes
 
 
 # --- Pronostics publiés -----------------------------------------------------
@@ -615,43 +498,3 @@ Si tu ne trouves pas l'arrivée officielle avec certitude, réponds {{"gagnant":
         return _numero(extraire_json(_texte(data)).get("gagnant")) or None
     except (ValueError, AttributeError):
         return None
-
-
-# --- Historique ----------------------------------------------------------
-
-COLONNES_HISTORIQUE = ["date", "hippodrome", "discipline", "profil", "pari", "chevaux",
-                       "cote", "proba_ia", "gain_espere", "mise", "resultat", "gain_reel",
-                       "course", "analyse", "source_gain"]
-RESULTATS = ["En attente", "Gagné", "Perdu"]
-
-
-def ligne_historique(date, hippo, discipline, profil, pari, course="", analyse=""):
-    return {"course": course, "analyse": analyse, "source_gain": "",
-            "date": date, "hippodrome": hippo, "discipline": discipline, "profil": profil,
-            "pari": pari["type"], "chevaux": pari["num"], "cote": pari["cote"],
-            "proba_ia": round(pari["proba_retenue"], 3), "gain_espere": round(pari["gain_espere"], 3),
-            "mise": pari["mise"], "resultat": "En attente", "gain_reel": 0.0}
-
-
-def calculer_stats(df):
-    """Statistiques sur les tickets dont le résultat est connu (Gagné / Perdu).
-
-    gain_reel = somme rapportée par le ticket (0 si perdu).
-    """
-    if df is None or df.empty:
-        resolus = pd.DataFrame(columns=COLONNES_HISTORIQUE)
-    else:
-        resolus = df[df['resultat'].isin(["Gagné", "Perdu"])]
-    mises = pd.to_numeric(resolus['mise'], errors='coerce').fillna(0)
-    gains = pd.to_numeric(resolus['gain_reel'], errors='coerce').fillna(0)
-    total_mise, total_gain = float(mises.sum()), float(gains.sum())
-    nb = len(resolus)
-    return {
-        "nb_tickets": 0 if df is None else len(df),
-        "nb_resolus": nb,
-        "reussite": (resolus['resultat'] == "Gagné").sum() / nb * 100 if nb else 0.0,
-        "mise_totale": total_mise,
-        "gains_totaux": total_gain,
-        "benefice": total_gain - total_mise,
-        "roi": (total_gain - total_mise) / total_mise * 100 if total_mise else 0.0,
-    }

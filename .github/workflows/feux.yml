@@ -1,0 +1,26 @@
+name: Feux du jour (Telegram, sans conseil de pari)
+
+on:
+  schedule:
+    # Une fois par jour, hors des minutes chargées. GitHub peut retarder ou sauter ce lancement.
+    - cron: "17 8 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  feux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python feux_du_matin.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

@@ -42,6 +42,11 @@ def _get(url):
         raise PmuErreur("Réponse du PMU illisible. Utilisez le copier-coller.")
 
 
+def aujourd_hui():
+    """Date du jour à Paris (le serveur Streamlit est en UTC)."""
+    return datetime.now(tz=PARIS).date()
+
+
 def date_pmu(jour):
     """date -> « 21112026 »."""
     return jour.strftime("%d%m%Y")
@@ -71,6 +76,8 @@ def lire_programme(data):
                 "partants": c.get("nombreDeclaresPartants"),
                 "statut": STATUTS.get(c.get("statut"), "à venir"),
                 "arrivee": [str(n) for n in arrivee],
+                # « E_ » : même pari, joué en ligne
+                "paris": sorted({str(p.get("typePari", "")).removeprefix("E_") for p in c.get("paris") or []}),
             })
     return courses
 
@@ -136,6 +143,7 @@ def partants(jour, reunion, course):
 
 
 # --- Cotes probables du Simple Placé -------------------------------------------
+# Attention : pour une course partie, ce sont les cotes de clôture (publiées après le départ).
 
 def lire_cotes_place(data):
     """{numéro: (cote probable minimale, maximale)} du Simple Placé."""
@@ -168,14 +176,18 @@ def lire_rapports_place(data):
 
 
 def arrivee(date_course, reunion, course):
-    """{"terminee", "annulee", "gagnant", "ordre", "rapports_gagnant", "rapports_place"} (date « 21112026 »)."""
+    """{"terminee", "annulee", "gagnant", "ordre", "rapports_gagnant", "rapports_place",
+    "non_partants"} (date « 21112026 »)."""
     data = _get(f"{BASE}/{date_course}")
     infos = next((c for c in lire_programme(data) if c["reunion"] == reunion and c["course"] == course), None)
     if infos is None:
         raise PmuErreur("Course introuvable au PMU.")
     terminee = infos["statut"] == "terminée" and bool(infos["arrivee"])
-    definitifs = None
+    definitifs, non_partants = None, []
     if terminee:
+        # sans cette liste, un non-partant serait compté perdu : en cas d'échec on ne règle rien
+        participants = _get(f"{BASE}/{date_course}/R{reunion}/C{course}/participants").get("participants", [])
+        non_partants = [str(p["numPmu"]) for p in participants if p.get("statut") == "NON_PARTANT"]
         try:
             definitifs = _get(f"{BASE}/{date_course}/R{reunion}/C{course}/rapports-definitifs")
         except PmuErreur:
@@ -183,7 +195,8 @@ def arrivee(date_course, reunion, course):
     return {"terminee": terminee, "annulee": infos["statut"] == "annulée",
             "gagnant": infos["arrivee"][0] if terminee else None,
             "ordre": infos["arrivee"], "rapports_gagnant": lire_rapports_gagnant(definitifs),
-            "rapports_place": lire_rapports_place(definitifs)}
+            "rapports_place": lire_rapports_place(definitifs),
+            "non_partants": non_partants}
 
 
 def decouper_id(course_id):
