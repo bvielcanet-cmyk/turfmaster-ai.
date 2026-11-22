@@ -10,22 +10,16 @@ import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import decision
 from test_pmu import faux_get
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 SITE = (Path(__file__).parent / "donnees" / "partants_site.txt").read_text()
 
-# L'IA voit le n° 4 (cote 5.8) nettement au-dessus des cotes : pari mesurable en Équilibré
-AVEC_VALEUR = {"m": "☀️", "d": "3500m", "r": "Modéré",
+AVIS_IA = {"m": "☀️", "d": "3500m", "r": "Modéré",
                "chevaux": [{"num": n, "p": p, "out": n == "6"} for n, p in
-                           [("5", 45), ("4", 25), ("1", 12), ("3", 8), ("6", 5), ("7", 3), ("2", 2)]],
-               "pari_nom": "Trio", "pari_nums": "5 - 4 - 1"}
-# L'IA reprend l'avis des cotes : aucune valeur
-SANS_VALEUR = {**AVEC_VALEUR, "chevaux": [{"num": n, "p": p} for n, p in
-                                          [("5", 50), ("4", 15), ("1", 13), ("3", 10), ("6", 8), ("7", 2), ("2", 2)]]}
-
-
-def http(code=200, texte=None, json_=AVEC_VALEUR):
+                           [("5", 45), ("4", 25), ("1", 12), ("3", 8), ("6", 5), ("7", 3), ("2", 2)]]}
+def http(code=200, texte=None, json_=AVIS_IA):
     r = mock.Mock(status_code=code)
     texte = texte if texte is not None else json.dumps(json_)
     r.json.return_value = {"candidates": [{"content": {"parts": [{"text": texte}]}}]}
@@ -100,8 +94,8 @@ class FauxSheets:
     create = update
 
 
-def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profil=None,
-           recherche=True, discipline=None, limite=None, contexte=CONTEXTE, presse=None, course=None):
+def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None,
+           recherche=True, discipline=None, contexte=CONTEXTE, presse=None, course=None):
     """Lance l'application. course=None : copier-coller ; sinon index de la course du programme PMU."""
     at = AppTest.from_file(APP, default_timeout=30)
     if secrets:
@@ -122,16 +116,12 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
             else:
                 [sb for sb in at.selectbox if sb.label == "Course"][0].select_index(course).run()
         if at.button and not at.exception and (at.text_area or course is not None):
-            if profil:
-                at.select_slider[0].set_value(profil)
             if not recherche:
                 interrupteur(at, "Recherche Google").set_value(False)
             if presse is None:
                 interrupteur(at, "Pronostics de la presse").set_value(False)  # désactivés par défaut
             if discipline:
                 [sb for sb in at.selectbox if sb.label == "Discipline"][0].set_value(discipline)
-            if limite is not None:
-                at.number_input[1].set_value(limite)
             if course is None:
                 at.text_area[0].input(texte)
             analyser(at).click().run()
@@ -143,16 +133,19 @@ def interrupteur(at, texte):
 
 
 def analyser(at):
-    return [b for b in at.button if "ANALYSER" in b.label][0]
+    return [b for b in at.button if "AVIS DE L" in b.label][0]
 
 
 def textes(elements):
     return [e.value for e in elements]
 
 
-def verdict(at):
-    """Texte de l'encadré du verdict (À JOUER / NE PAS JOUER)."""
+def feu(at):
     return " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
+
+
+def avis_ia(at):
+    return " ".join(m.value for m in at.markdown if "tm-legende" in m.value)
 
 
 def classement(at):
@@ -168,7 +161,7 @@ def test_sans_secret():
     assert "Configurez votre API KEY" in textes(at.error)[0]
 
 
-def test_pari_conseille_avec_recherche():
+def test_avis_ia_avec_recherche():
     at, p = lancer([http()])
     assert not at.exception and not at.error, textes(at.error)
     assert p.call_count == 2
@@ -180,30 +173,34 @@ def test_pari_conseille_avec_recherche():
     assert all("CLE-TEST" not in c.args[0] for c in p.call_args_list if c.args)
     assert "terrain : souple" in prompt(p).lower()  # contexte du jour transmis
     assert "Discipline : Obstacles" in prompt(p)  # détectée d'après la musique
-    v = verdict(at)
-    assert "✅ À JOUER" in v and "n° 4 FOREST DU PECOS" in v and "<b>5.8</b>" in v
-    c = classement(at)
+    c = avis_ia(at)
     assert c.index("LOKI DE LA BRUNIE") < c.index("FOREST DU PECOS")  # ordre de l'IA
-    assert "PARI" in c and "🔥 OUTSIDER" in c
-    assert any("Trio 5 - 4 - 1" in m and "non conseillé" in m for m in textes(at.markdown))
+    assert "🔥 OUTSIDER" in c and "cotes" in c
 
 
-def test_pas_de_pari_sans_valeur():
-    at, _ = lancer([http(json_=SANS_VALEUR)])
-    v = verdict(at)
-    assert "🚫 NE PAS JOUER" in v and "Aucun cheval n&#x27;est assez intéressant" in v
+def test_feu_et_podium_sans_aucune_requete_gemini():
+    at, p = demarrer(course=1)
+    assert p.call_count == 0 and not at.exception
+    assert any(f["emoji"] in feu(at) for f in decision.FEUX.values())
+    assert "🥇" in classement(at) and "🥉" in classement(at)
+    assert any("Aucun avantage" in i for i in textes(at.info))
 
 
-def test_pas_de_pari_sans_cotes():
-    texte = "5 LOKI 1s 2s\n4 FOREST 1s 3s 5.8"
-    reponse = {"chevaux": [{"num": "5", "p": 60}, {"num": "4", "p": 40}], "pari_nom": "Couplé", "pari_nums": "5 - 4"}
-    at, _ = lancer([http(json_=reponse)], texte=texte, recherche=False)
-    assert "Cote manquante (n° 5)" in verdict(at)
+def test_jamais_de_conseil_de_jouer():
+    at, _ = lancer([http()], presse=PRESSE)
+    ecran = " ".join(textes(at.markdown) + textes(at.caption) + textes(at.info) + textes(at.success)
+                     + [b.label for b in at.button] + [m.label for m in at.metric])
+    for interdit in ("À JOUER", "JEU POSSIBLE", "Mise conseillée", "PLACÉ CONSEILLÉ", "ONE SHOT", "Kelly"):
+        assert interdit not in ecran
+    # rien n'est présélectionné : ni pari, ni cheval, ni mise
+    assert champ(at.selectbox, "Pari").value is None and champ(at.selectbox, "Mon cheval").value is None
+    assert champ(at.number_input, "Ma mise (€)").value == 0
 
 
-def test_profil_prudent_refuse_cote_trop_haute():
-    at, _ = lancer([http()], profil="Prudent")
-    assert "NE PAS JOUER" in verdict(at)
+def test_pas_de_feu_sans_cotes():
+    at, _ = lancer([http(json_={"chevaux": [{"num": "5", "p": 60}, {"num": "4", "p": 40}]})],
+                   texte="5 LOKI 1s 2s\n4 FOREST 1s 3s 5.8", recherche=False)
+    assert "PAS ENCORE DE FEU" in feu(at) and not at.exception
 
 
 def test_sans_recherche_un_seul_appel():
@@ -216,7 +213,7 @@ def test_recherche_indisponible():
     at, p = lancer([http()], contexte=http(429))
     assert p.call_count == 2
     assert any("Recherche Google indisponible" in c for c in textes(at.caption))
-    assert "À JOUER" in verdict(at)  # l'analyse a quand même eu lieu, sans données du jour
+    assert "LOKI" in avis_ia(at)  # l'analyse a quand même eu lieu, sans données du jour
     assert "Aucune donnée du jour" in prompt(p)
 
 
@@ -233,7 +230,7 @@ def test_meme_course_en_cache():
     at, _ = lancer([http()])
     with mock.patch("requests.post", side_effect=[]) as p2:
         analyser(at).click().run()
-    assert p2.call_count == 0 and "À JOUER" in verdict(at)
+    assert p2.call_count == 0 and "LOKI" in avis_ia(at)
 
 
 def test_discipline_contradictoire_signalee():
@@ -243,7 +240,7 @@ def test_discipline_contradictoire_signalee():
 
 
 def test_numero_inconnu_signale():
-    reponse = {**AVEC_VALEUR, "chevaux": AVEC_VALEUR["chevaux"] + [{"num": "15", "p": 1}]}
+    reponse = {**AVIS_IA, "chevaux": AVIS_IA["chevaux"] + [{"num": "15", "p": 1}]}
     at, _ = lancer([http(json_=reponse)], recherche=False)
     assert any("n° 15, qui n'est pas au départ" in w for w in textes(at.warning))
 
@@ -269,68 +266,100 @@ def test_saisie_vide_et_lignes_ignorees():
     assert "Prix de Paris" in textes(at.warning)[0]
 
 
-def historique(*lignes):
-    return pd.DataFrame([{"date": d, "hippodrome": "V", "discipline": "Obstacles", "profil": "Équilibré",
-                          "pari": "Simple Gagnant", "chevaux": "1", "cote": 3.0, "proba_ia": .4,
-                          "gain_espere": .2, "mise": m, "resultat": r, "gain_reel": g} for d, m, r, g in lignes])
-
-
-def maintenant(delta_jours=0):
-    return (pd.Timestamp.now() - pd.Timedelta(days=delta_jours)).strftime("%Y-%m-%d %H:%M")
-
-
 def bouton(at, texte):
     return [b for b in at.button if texte in b.label][0]
 
 
+def champ(elements, label):
+    return [e for e in elements if e.label == label][0]
+
+
+def demarrer(sheets=None, course=None):
+    """Ouvre l'application sans rien demander à l'IA."""
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.secrets["gemini"] = {"api_key": "CLE-TEST"}
+    if sheets is not None:
+        at.secrets["connections"] = {"gsheets": {"type": "service_account"}}
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p, \
+            mock.patch("streamlit.connection", return_value=sheets):
+        at.run()
+        if course is not None:
+            champ(at.selectbox, "Course").select_index(course).run()
+    return at, p
+
+
+def choisir(at, pari="Simple Gagnant", cheval="5", mise=10.0, sheets=None, noter=False):
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("streamlit.connection", return_value=sheets):
+        champ(at.selectbox, "Pari").set_value(pari).run()
+        champ(at.selectbox, "Mon cheval").set_value(cheval).run()
+        champ(at.number_input, "Ma mise (€)").set_value(mise).run()
+        if noter:
+            bouton(at, "le noter dans mon carnet").click().run()
+
+
+@pytest.mark.parametrize("pari, gain", [("Simple Gagnant", "+90,00"), ("Simple Placé", None)])
+def test_risque_du_pari_choisi(pari, gain):
+    at, p = demarrer(course=1)
+    choisir(at, pari)
+    ecran = " ".join(textes(at.markdown) + textes(at.caption))
+    assert "perdre 10,00" in ecran and p.call_count == 0 and not at.exception
+    assert not gain or gain in ecran
+
+
+def test_budget_depasse():
+    at, _ = demarrer(course=1)
+    choisir(at, mise=25.0)
+    assert any("dépassez votre budget" in w for w in textes(at.warning))
+
+
 def test_stockage_local_sans_google_sheets(tmp_path):
     at, _ = lancer([http()], recherche=False)
-    assert (tmp_path / "Analyses.csv").exists()  # analyse enregistrée même sans ticket
-    with mock.patch("requests.get", side_effect=faux_get):
-        bouton(at, "enregistrer le ticket").click().run()
-    tickets = pd.read_csv(tmp_path / "TurfMaster.csv", dtype=str)
-    assert tickets.iloc[0]["chevaux"] == "4" and tickets.iloc[0]["analyse"]
+    assert (tmp_path / "Analyses.csv").exists()
     assert any("perdues à chaque redémarrage" in c for c in textes(at.caption))
+    assert not (tmp_path / "TurfMaster.csv").exists()  # analyser n'est pas parier
 
 
-def test_enregistrer_ticket_google_sheets():
+def test_noter_un_pari_dans_google_sheets():
     feuille = FauxSheets()
-    at, _ = lancer([http()], sheets=feuille, recherche=False)
-    with mock.patch("streamlit.connection", return_value=feuille), mock.patch("requests.get", side_effect=faux_get):
-        bouton(at, "enregistrer le ticket").click().run()
+    at, _ = demarrer(feuille, course=1)
+    choisir(at, sheets=feuille, noter=True)
     ligne = feuille.onglets["TurfMaster"].iloc[0]
-    assert ligne["pari"] == "Simple Gagnant" and ligne["chevaux"] == "4" and ligne["cote"] == 5.8
-    assert 0 < ligne["mise"] <= 20 and ligne["resultat"] == "En attente"
-    assert len(feuille.onglets["Analyses"]) == 1
-    assert any("Ticket enregistré" in s for s in textes(at.success))
+    assert ligne["pari"] == "Simple Gagnant" and ligne["chevaux"] == "5" and ligne["cote"] == 10
+    assert ligne["mise"] == 10 and ligne["resultat"] == "En attente" and ligne["date_course"]
+    assert any("Pari noté" in s for s in textes(at.success))
 
 
-def test_limite_de_pertes_atteinte():
-    feuille = FauxSheets(TurfMaster=historique((maintenant(1), 60, "Perdu", 0), (maintenant(2), 50, "Perdu", 0)))
-    at, _ = lancer([http()], sheets=feuille, recherche=False)  # limite par défaut : 100 €
-    assert "NE PAS JOUER" in verdict(at) and "Limite de pertes atteinte" in verdict(at)
+def test_anciens_tickets_lisibles():
+    anciens = pd.DataFrame([{"date": "2026-10-01 10:00", "hippodrome": "V", "pari": "Simple Gagnant", "chevaux": "1",
+                             "mise": 20, "resultat": r, "gain_reel": g} for r, g in (("Gagné", 50), ("Perdu", 0))])
+    at, _ = demarrer(FauxSheets(TurfMaster=anciens))
+    assert champ(at.metric, "Résultat net").value == "+10,00\u00a0€"
 
 
-def test_limite_de_pertes_reduit_la_mise():
-    feuille = FauxSheets(TurfMaster=historique((maintenant(1), 97, "Perdu", 0)))
-    at, _ = lancer([http()], sheets=feuille, recherche=False)
-    assert "3,00\u00a0€" in verdict(at)
+def test_lecture_ratee_n_efface_rien():
+    class LectureEnPanne(FauxSheets):
+        def read(self, worksheet=None, ttl=None):
+            raise APIError("503")
+    feuille = LectureEnPanne(TurfMaster=pd.DataFrame([{"mise": 99}]))
+    at, _ = demarrer(feuille, course=1)
+    choisir(at, sheets=feuille, noter=True)
+    assert feuille.onglets["TurfMaster"]["mise"].tolist() == [99]
+    assert any("Impossible de noter" in e for e in textes(at.error))
 
 
-def test_stats_historique():
-    feuille = FauxSheets(TurfMaster=historique((maintenant(30), 20, "Gagné", 50), (maintenant(30), 20, "Perdu", 0)))
-    at, _ = lancer([], texte="", sheets=feuille, recherche=False)
-    valeurs = {m.label: m.value for m in at.metric}
-    assert valeurs["Bénéfice"] == "+10.00 €" and valeurs["ROI"] == "+25.0 %"
-    assert valeurs["Perte 7 jours"] == "0.00 € / 100 €"
+def test_courses_du_jour_sans_gemini():
+    at, _ = demarrer()
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p:
+        bouton(at, "ALLUMER LES FEUX").click().run()
+    assert p.call_count == 0 and not at.exception
+    assert any("R1C2" in m and "favori" in m for m in textes(at.markdown))
 
 
 # --- Programme PMU, arrivées et mesure -----------------------------------------
 
 # Réponse de l'IA pour la course du PMU (le n° 2 est non partant) : elle voit le n° 5 bien au-dessus des cotes
 IA_PMU = {"m": "🌧️", "d": "4400m", "r": "Modéré",
-          "chevaux": [{"num": n, "p": p} for n, p in [("5", 40), ("1", 20), ("4", 15), ("6", 12), ("3", 8), ("7", 5)]],
-          "pari_nom": "Trio", "pari_nums": "5 - 1 - 4"}
+          "chevaux": [{"num": n, "p": p} for n, p in [("5", 40), ("1", 20), ("4", 15), ("6", 12), ("3", 8), ("7", 5)]]}
 
 
 def test_course_pmu_a_venir():
@@ -340,7 +369,7 @@ def test_course_pmu_a_venir():
     assert "5 - LOKI DE LA BRUNIE (F | 3s 2s 6c" in prompt(p) and "cote 10" in prompt(p)
     assert "Hippodrome : Auteuil | Discipline : Obstacles" in prompt(p)
     assert "2 - FENOMENE" not in prompt(p)  # non partant exclu
-    assert "À JOUER" in verdict(at) and "n° 5 LOKI DE LA BRUNIE" in verdict(at)
+    assert "LOKI DE LA BRUNIE" in avis_ia(at) and feu(at)
 
 
 def test_course_pmu_terminee_sans_recherche(tmp_path):
@@ -350,12 +379,12 @@ def test_course_pmu_terminee_sans_recherche(tmp_path):
     assert analyses.iloc[0]["course"] == "R1C1" and analyses.iloc[0]["date_course"]
 
 
-def test_recuperer_arrivee_et_mettre_a_jour_le_ticket(tmp_path):
+def test_recuperer_arrivee_et_regler_le_pari(tmp_path):
     at, _ = lancer([http(json_=IA_PMU)], course=0)
+    choisir(at, noter=True)
     with mock.patch("requests.get", side_effect=faux_get):
-        bouton(at, "enregistrer le ticket").click().run()
         bouton(at, "Récupérer les arrivées").click().run()
-    assert any("1 arrivée(s) récupérée(s) · 1 ticket(s) mis à jour" in i for i in textes(at.info))
+    assert any("1 arrivée(s) récupérée(s) · 1 pari(s) réglé(s)" in i for i in textes(at.info))
     analyses = pd.read_csv(tmp_path / "Analyses.csv", dtype=str, keep_default_na=False)
     assert analyses.iloc[0]["gagnant"] == "5" and analyses.iloc[0]["source_resultat"] == "PMU officiel : 10.4"
     ticket = pd.read_csv(tmp_path / "TurfMaster.csv", dtype={"chevaux": str}).iloc[0]
@@ -406,9 +435,7 @@ def test_presse_compilee_et_verifiee():
     assert any("Geny cite des numéros absents (15)" in w for w in textes(at.warning))
     # consensus transmis à l'IA
     assert "PRONOSTICS PUBLIÉS" in prompt(p) and "n° 5 LOKI DE LA BRUNIE : 14 pts, cité par 3/3" in prompt(p)
-    # verdict et classement indiquent l'avis de la presse
-    assert "Pronostiqueurs : <b>cité par 3 sources sur 3 (1er choix de 1)</b>" in verdict(at)
-    assert "📰 cité par 3 sources sur 3 (1er choix de 2)" in classement(at)
+    assert "📰 cité par 3 sources sur 3 (1er choix de 2)" in avis_ia(at)
 
 
 def test_presse_seulement_des_sources_inventees():
@@ -421,7 +448,7 @@ def test_presse_seulement_des_sources_inventees():
 def test_presse_indisponible():
     at, _ = lancer([http()], presse=http(429))
     assert any("Pronostics de la presse indisponibles" in c for c in textes(at.caption))
-    assert "À JOUER" in verdict(at)
+    assert "LOKI" in avis_ia(at)
 
 
 def test_presse_gardee_en_memoire():
@@ -476,18 +503,18 @@ class SpreadsheetNotFound(Exception):
 def test_erreur_google_sheets_expliquee(erreur, cause):
     at, _ = lancer([http()], sheets=SheetsEnPanne(erreur), recherche=False)
     assert any("Analyse non enregistrée" in c and cause in c for c in textes(at.caption)), textes(at.caption)
-    assert any(cause in e for e in textes(at.error))  # rappel en tête de l'onglet Historique
+    assert any(cause in e for e in textes(at.error))  # rappel en tête du carnet
 
 
 
 def test_google_sheets_cycle_complet():
-    """Analyse, ticket, arrivée : tout passe par un Google Sheet simulé qui déforme les types."""
+    """Analyse, pari, arrivée : tout passe par un Google Sheet simulé qui déforme les types."""
     feuille = FauxSheets()
     at, _ = lancer([http(json_=IA_PMU)], course=0, sheets=feuille)
+    choisir(at, sheets=feuille, noter=True)
     with mock.patch("streamlit.connection", return_value=feuille), mock.patch("requests.get", side_effect=faux_get):
-        bouton(at, "enregistrer le ticket").click().run()
         bouton(at, "Récupérer les arrivées").click().run()
-    assert any("1 arrivée(s) récupérée(s) · 1 ticket(s) mis à jour" in i for i in textes(at.info)), textes(at.info)
+    assert any("1 arrivée(s) récupérée(s) · 1 pari(s) réglé(s)" in i for i in textes(at.info)), textes(at.info)
     ticket = feuille.onglets["TurfMaster"].iloc[0]
     assert ticket["resultat"] == "Gagné" and ticket["source_gain"] == "rapport officiel PMU"
     assert any("1 course(s) mesurée(s)" in i for i in textes(at.info))
@@ -544,186 +571,8 @@ def test_tester_courses_passees_sans_doublon(tmp_path):
     assert any("2 course(s) passée(s) testée(s)" in i and "Plus aucune" not in i for i in textes(at.info))
 
 
-
-# --- Conseil Placé et suivi à blanc ----------------------------------------------------
-
-def get_course2_terminee(url, **kw):
-    """Faux PMU où la course R1C2 est terminée : arrivée 6-1-5, STINGO (n° 6) placé à 3,40 €."""
-    import copy
-    r = faux_get(url, **kw)
-    data = copy.deepcopy(r.json.return_value)
-    if "programme" in data:
-        c2 = data["programme"]["reunions"][0]["courses"][1]
-        c2["statut"], c2["ordreArrivee"] = "ARRIVEE_DEFINITIVE_COMPLETE", [[6], [1], [5]]
-    elif url.endswith("/rapports-definitifs"):
-        data = [{"typePari": "SIMPLE_GAGNANT", "rapports": [{"combinaison": "6", "dividendePourUnEuro": 520}]},
-                {"typePari": "SIMPLE_PLACE", "rapports": [{"combinaison": "6", "dividendePourUnEuro": 340},
-                                                          {"combinaison": "1", "dividendePourUnEuro": 180}]}]
-    r = mock.Mock(status_code=200)
-    r.json.return_value = data
-    return r
-
-
-def conseil_html(at):
-    return " ".join(m.value for m in at.markdown if "tm-place" in m.value or "tm-neutre" in m.value)
-
-
 @pytest.fixture(autouse=True)
 def depart_a_venir(monkeypatch):
     """Les courses « à venir » du faux programme sont datées du 21/11/2026 : on considère leur départ non passé."""
     import pmu as module_pmu
     monkeypatch.setattr(module_pmu, "depart_passe", lambda c, jour, maintenant=None: False)
-
-
-def test_conseil_place_sans_ia_et_suivi(tmp_path):
-    at, p = lancer([], texte="", recherche=False)  # rien n'est analysé
-    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as post:
-        at.radio[0].set_value("📅 Programme PMU").run()
-        bouton(at, "CONSEIL PLACÉ").click().run()
-    assert post.call_count == 0  # aucune requête Gemini
-    html = conseil_html(at)
-    assert "PLACÉ CONSEILLÉ" in html and "n° 6 STINGO" in html and "3.1 – 3.9" in html and "10,00" in html
-    suivi = pd.read_csv(tmp_path / "ConseilsPlace.csv", dtype=str, keep_default_na=False)
-    assert len(suivi) == 1 and suivi.iloc[0]["num"] == "6" and suivi.iloc[0]["resultat"] == "En attente"
-
-    # Après la course : réglé au rapport officiel du Placé
-    with mock.patch("requests.get", side_effect=get_course2_terminee), mock.patch("requests.post"):
-        st.cache_data.clear()
-        bouton(at, "Récupérer les arrivées").click().run()
-    assert any("1 conseil(s) Placé réglé(s)" in i for i in textes(at.info)), textes(at.info)
-    suivi = pd.read_csv(tmp_path / "ConseilsPlace.csv", dtype=str, keep_default_na=False)
-    assert suivi.iloc[0]["resultat"] == "Placé" and float(suivi.iloc[0]["gain"]) == pytest.approx(24.0)
-    valeurs = {m.label: m.value for m in at.metric}
-    assert valeurs["Rendement (1 € par conseil)"] == "+240.0 %" and valeurs["Gain fictif"] == "+24.00 €"
-
-
-def test_conseil_place_course_terminee_non_compte(tmp_path):
-    at, _ = lancer([], texte="", recherche=False)
-    with mock.patch("requests.get", side_effect=faux_get):
-        at.radio[0].set_value("📅 Programme PMU").run()
-        [sb for sb in at.selectbox if sb.label == "Course"][0].select_index(0).run()  # R1C1, terminée
-        bouton(at, "CONSEIL PLACÉ").click().run()
-    assert "PLACÉ CONSEILLÉ" in conseil_html(at)
-    assert any("pas compté dans le suivi" in c for c in textes(at.caption))
-
-
-def test_conseil_place_depart_passe_non_compte(tmp_path, monkeypatch):
-    import pmu as module_pmu
-    monkeypatch.setattr(module_pmu, "depart_passe", lambda c, jour, maintenant=None: True)
-    at, _ = lancer([], texte="", recherche=False)
-    with mock.patch("requests.get", side_effect=faux_get):
-        at.radio[0].set_value("📅 Programme PMU").run()
-        bouton(at, "CONSEIL PLACÉ").click().run()  # R1C2 « à venir » mais heure passée
-    assert any("déjà partie" in c for c in textes(at.caption))
-    assert not (tmp_path / "ConseilsPlace.csv").exists()
-    assert not (tmp_path / "ConseilsPlace.csv").exists()
-
-
-def test_conseil_place_aussi_avec_analyse_ia():
-    at, p = lancer([http(json_=IA_PMU)], course=1)
-    assert "PLACÉ CONSEILLÉ" in conseil_html(at) and "À JOUER" in verdict(at)
-
-
-def test_pas_de_conseil_place():
-    sans_valeur = {"rapportsParticipant": [{"numPmu": n, "minRapportProbable": 1.1, "maxRapportProbable": 1.2}
-                                           for n in range(1, 8)]}
-
-    def get_sans_valeur(url, **kw):
-        if url.endswith("/rapports/SIMPLE_PLACE"):
-            r = mock.Mock(status_code=200)
-            r.json.return_value = sans_valeur
-            return r
-        return faux_get(url, **kw)
-
-    at, _ = lancer([], texte="", recherche=False)
-    with mock.patch("requests.get", side_effect=get_sans_valeur):
-        at.radio[0].set_value("📅 Programme PMU").run()
-        bouton(at, "CONSEIL PLACÉ").click().run()
-    assert "Pas de Placé intéressant" in conseil_html(at)
-
-
-
-# --- Plan du jour --------------------------------------------------------------------------
-
-def mode_plan(at, texte):
-    radio = [r for r in at.radio if any("One shot" in str(o) for o in r.options)][0]
-    radio.set_value([o for o in radio.options if texte in str(o)][0]).run()
-
-
-def test_plan_du_jour(tmp_path):
-    at, _ = lancer([], texte="", recherche=False)
-    mode_plan(at, "Dans la durée")
-    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as post, \
-            mock.patch("plan.minutes_avant", return_value=60):
-        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
-    assert post.call_count == 0  # crible gratuit
-    html = " ".join(m.value for m in at.markdown if "tm-ligne" in m.value or "Aucune course prometteuse" in m.value)
-    assert "Placé n° 6 STINGO" in html and "25,00" in html  # 1 course retenue : 50 % du budget de 50 €
-    assert any("1 avec un Placé intéressant" in c for c in textes(at.caption))
-
-    # Approfondissement par l'IA (1 requête) : avis informatif
-    with mock.patch("requests.get", side_effect=faux_get), \
-            mock.patch("requests.post", side_effect=gemini_simule([http(json_=IA_PMU)])) as post:
-        bouton(at, "Approfondir avec l'IA").click().run()
-    assert post.call_count == 1
-    assert any("🔬 R1C2 n° 6" in c and "IA" in c for c in textes(at.caption)), textes(at.caption)
-
-
-
-# --- Protection des mises -----------------------------------------------------------------
-
-def test_protection_divise_les_mises_apres_une_baisse():
-    # Tickets joués : +200 puis -190 -> capital 1010, 16 % sous le plus haut (1200) : mises divisées par 2
-    feuille = FauxSheets(TurfMaster=pd.DataFrame([
-        {**historique((maintenant(3), 10, "Gagné", 210)).iloc[0].to_dict()},
-        {**historique((maintenant(2), 190, "Perdu", 0)).iloc[0].to_dict()},
-    ]))
-    at, _ = lancer([], texte="", sheets=feuille, recherche=False)
-    assert any("Protection active" in w for w in textes(at.warning)), textes(at.warning)
-    with mock.patch("requests.get", side_effect=faux_get), mock.patch("streamlit.connection", return_value=feuille):
-        at.radio[0].set_value("📅 Programme PMU").run()
-        bouton(at, "CONSEIL PLACÉ").click().run()
-    assert "5,05" in conseil_html(at)  # 1 % de 1010 € = 10,10 €, divisé par 2
-
-
-def test_sans_baisse_mises_normales():
-    at, _ = lancer([], texte="", recherche=False)
-    assert any("Capital actuel" in c for c in textes(at.caption))
-    with mock.patch("requests.get", side_effect=faux_get):
-        at.radio[0].set_value("📅 Programme PMU").run()
-        bouton(at, "CONSEIL PLACÉ").click().run()
-    assert "10,00" in conseil_html(at)
-
-
-
-# --- Mode one shot ---------------------------------------------------------------------------
-
-def test_one_shot_feu_et_repartition():
-    from test_plan import conseils_types
-    at, _ = lancer([], texte="", recherche=False)
-    with mock.patch("plan.cribler", return_value=(conseils_types(), 9)):
-        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
-    feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
-    assert "JEU POSSIBLE" in feu or "RISQUE ÉLEVÉ" in feu
-    assert "Risque de tout perdre" in feu and "2 sur 3" in feu
-    plan_txt = " ".join(m.value for m in at.markdown if "tm-ligne" in m.value)
-    assert plan_txt.count("Placé n°") == 3  # Équilibré : 3 Placés
-
-
-def test_one_shot_rouge_si_moins_de_deux_paris():
-    at, _ = lancer([], texte="", recherche=False)
-    with mock.patch("requests.get", side_effect=faux_get), mock.patch("plan.minutes_avant", return_value=60):
-        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
-    feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
-    assert "NE PAS JOUER AUJOURD" in feu and "Moins de 2 Placés" in feu
-
-
-
-def test_one_shot_rouge_sans_promesse_de_gain():
-    from test_plan import conseils_types
-    risques = conseils_types().assign(proba_corrigee=.2, cote_min=6.0, valeur=.2)
-    at, _ = lancer([], texte="", recherche=False)
-    with mock.patch("plan.cribler", return_value=(risques, 9)):
-        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
-    feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
-    assert "NE PAS JOUER" in feu and "de risque de tout perdre" in feu and "2 sur 3" not in feu

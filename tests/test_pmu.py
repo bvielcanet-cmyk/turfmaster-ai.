@@ -51,7 +51,8 @@ def test_arrivee():
         a = pmu.arrivee("21112026", 1, 1)
         b = pmu.arrivee("21112026", 1, 2)
     assert a == {"terminee": True, "annulee": False, "gagnant": "5", "ordre": ["5", "1", "6", "2", "3", "4"],
-                 "rapports_gagnant": {"5": 10.4}, "rapports_place": {"5": 4.3, "1": 2.0}}
+                 "rapports_gagnant": {"5": 10.4}, "rapports_place": {"5": 4.3, "1": 2.0},
+                 "non_partants": ["2"]}
     assert b["terminee"] is False and b["gagnant"] is None
 
 
