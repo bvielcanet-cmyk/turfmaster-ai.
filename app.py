@@ -31,19 +31,27 @@ st.markdown("""
     .tm-verdict { border-radius: 14px; padding: 18px 20px; margin: 8px 0 18px; border: 2px solid; }
     .tm-oui { border-color: #1e9e4a; background: rgba(30, 158, 74, .12); }
     .tm-non { border-color: #d9822b; background: rgba(217, 130, 43, .12); }
-    .tm-titre { font-size: 1.7rem; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
+    .tm-titre { font-size: 1.4rem; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
     .tm-oui .tm-titre { color: #1e9e4a; }
     .tm-non .tm-titre { color: #d9822b; }
-    .tm-conseil { border: 2px solid #3b82f6; background: rgba(59, 130, 246, .10); }
-    .tm-conseil .tm-titre { color: #3b82f6; }
-    .tm-detail { margin-top: 6px; line-height: 1.6; }
     .tm-carte { border: 2px solid #3b82f6; border-radius: 16px; padding: 12px; margin-bottom: 14px; }
     .tm-pari-jour { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0 4px;
                     font-size: 1.15rem; font-weight: 700; }
-    .tm-pari-jour b { font-size: 1.7rem; color: #3b82f6; white-space: nowrap; }
-    table.tm-arrivee { width: 100%; margin: 10px 0 2px; border-collapse: collapse; font-size: .85rem; }
-    table.tm-arrivee th, table.tm-arrivee td { border: none; padding: 3px 4px; text-align: right; }
-    table.tm-arrivee th:first-child, table.tm-arrivee td.tm-cheval { text-align: left; }
+    .tm-pari-jour b { font-size: 2.3rem; white-space: nowrap; }
+    .tm-bord-vert { border-color: #1e9e4a; }
+    .tm-bord-orange { border-color: #d9822b; }
+    .tm-quand { font-size: .9rem; }
+    .tm-fiabilite { font-weight: 700; font-size: .95rem; margin-top: 2px; }
+    .tm-bord-vert .tm-fiabilite { color: #1e9e4a; }
+    .tm-bord-orange .tm-fiabilite { color: #d9822b; }
+    .tm-mise { font-size: 1rem; }
+    .tm-titre-arrivee { display: flex; justify-content: space-between; font-size: .8rem; opacity: .7; margin-top: 12px; }
+    .tm-cheval { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+    .tm-cheval .tm-nom { font-weight: 400; }
+    .tm-plus { margin-top: 8px; font-size: .9rem; }
+    .tm-plus summary { cursor: pointer; opacity: .7; }
+    .tm-course { flex: 1; line-height: 1.3; }
+    .tm-course small { display: block; opacity: .7; }
     .tm-neutre { border-color: rgba(127, 127, 127, .5); background: rgba(127, 127, 127, .08); }
     .tm-neutre .tm-titre { font-size: 1.15rem; opacity: .8; }
     .tm-pari { font-size: 1.2rem; font-weight: 700; margin-top: 6px; }
@@ -439,114 +447,73 @@ def heure_paris():
     return datetime.now(tz=pmu.PARIS).replace(tzinfo=None)
 
 
-def feu_html(ordre):
-    """Le feu de la course : sa lisibilité, jamais un conseil de jouer."""
+def mise_texte(x):
+    return f"💶 Mise conseillée : <b>{x:g}\u00a0€</b> maximum".replace(".", ",")
+
+
+def feu_html(ordre, conseil=None):
+    """Une course en un coup d'œil : fiabilité, cheval, un seul pourcentage, mise ou ne pas jouer."""
     couleur = decision.feu(ordre)
     if couleur is None:
-        return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">⚪ PAS ENCORE DE FEU</div>'
+        return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">⚪ PAS D\'ESTIMATION</div>'
                 '<div class="tm-pourquoi">Il faut au moins 4 partants et la cote de chacun.</div></div>')
-    f, favori, repere = decision.FEUX[couleur], ordre.iloc[0], decision.REPERES[couleur]
-    gagne, place = decision.chances_favori(ordre)
+    f, favori = decision.FEUX[couleur], ordre.iloc[0]
     classe = {"vert": "tm-oui", "orange": "tm-non", "rouge": "tm-rouge"}[couleur]
+    suite = ""
+    if conseil:
+        suite = mise_texte(conseil["mise"]) if conseil["mise"] else f"✋ <b>Ne pas jouer.</b> {escape(conseil['raison'])}"
     return f"""<div class="tm-verdict {classe}">
 <div class="tm-titre">{f['emoji']} {f['titre']}</div>
-<div class="tm-pari">{f['phrase']}</div>
-<div class="tm-chiffres">
-<div><span>⭐ Favori des parieurs</span><b>n° {escape(favori['num'])}</b><small>{escape(favori['nom'])}</small></div>
-<div><span>🏆 Ses chances de gagner</span><b>{pct(gagne)}</b><small>estimation corrigée</small></div>
-<div><span>🏅 D'être placé</span><b>{pct(place)}</b><small>dans les {decision.nombre_places(len(ordre))} premiers</small></div>
-</div>
-<div class="tm-pourquoi">Sur {repere['courses']} courses passées de cette couleur, le favori a gagné
-<b>{pct(repere['gagne'])}</b> du temps et a été placé <b>{pct(repere['place'])}</b> du temps.
-{"Les grands favoris restent souvent un peu surestimés. " if couleur == "vert" else ""}Le feu dit si la course est lisible, pas si un pari est rentable.</div>
+<div class="tm-pari-jour"><span>🏅 n° {escape(favori['num'])} {escape(favori['nom'])} placé</span>
+<b>{pct(decision.chances_favori(ordre)[1])}</b></div>
+<div class="tm-mise">{suite}</div>
 </div>"""
 
 
-def podium_html(ordre, nombre=6):
-    ordre = decision.chances_affichees(ordre)  # comme dans le feu
-    maxi, medailles = float(ordre["victoire"].max()), {1: "🥇", 2: "🥈", 3: "🥉"}
-    lignes = []
-    for _, o in ordre.head(nombre).iterrows():
-        lignes.append(
-            f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-rang">{medailles.get(o["rang"], o["rang"])}</span>'
-            f'<span class="tm-num">{escape(o["num"])}</span><span class="tm-nom">{escape(o["nom"])}</span>'
-            f'<span class="tm-pct">{pct(o["victoire"])}</span></div>'
-            f'<div class="tm-barre"><div class="tm-ia" style="width:{o["victoire"] / maxi * 100:.1f}%"></div></div>'
-            f'<div class="tm-sous">gagner {pct(o["victoire"])} · être placé {pct(o["place"])} · cote {o["cote"]:g}</div></div>')
-    return "".join(lignes)
-
-
-def conseil_html(c):
-    if not c["mise"]:
-        return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">✋ CONSEIL : PASSER</div>'
-                f'<div class="tm-pourquoi">{escape(c["raison"])}</div></div>')
-    return f"""<div class="tm-verdict tm-conseil">
-<div class="tm-titre">💡 CONSEIL : n° {escape(c['num'])} PLACÉ</div>
-<div class="tm-pari">{escape(c['nom'])}</div>
-<div class="tm-chiffres">
-<div><span>🎯 Chances d'être placé</span><b>{pct(c['chance'])}</b><small>estimation corrigée</small></div>
-<div><span>💶 Mise conseillée</span><b>{euros(c['mise'])}</b><small>au maximum, si vous jouez</small></div>
-<div><span>🧾 Ce pari coûte</span><b>≈ {euros(c['cout'])}</b><small>en moyenne, d'après le test</small></div>
-</div>
-<div class="tm-pourquoi">C'est le pari le plus probable, pas un pari gagnant à la longue.
-Ne pas jouer reste le choix le moins cher.</div>
-</div>"""
+def arrivee_html(chevaux):
+    """L'arrivée estimée : un cheval par ligne, un seul pourcentage (être placé)."""
+    medailles = {1: "🥇", 2: "🥈", 3: "🥉"}
+    return '<div class="tm-arrivee">' + "".join(
+        f'<div class="tm-cheval"><span class="tm-rang">{medailles.get(o["rang"], o["rang"])}</span>'
+        f'<span class="tm-num">{escape(str(o["num"]))}</span><span class="tm-nom">{escape(str(o["nom"]))}</span>'
+        f'<b>{pct(o["place"])}</b></div>' for o in chevaux) + "</div>"
 
 
 def pronostics_html(liste):
     return "".join(
-        f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-nom">{escape(x["pari"])}</span>'
-        f'<span class="tm-pct">{pct(x["chance"])}</span></div>'
-        f'<div class="tm-sous"><b>n° {escape(x["chevaux"])}</b> · sur le passé : {escape(x["bilan"])}</div></div>'
-        for x in liste)
+        f'<div class="tm-cheval"><span class="tm-nom">{escape(x["pari"])} '
+        f'<small>{escape(x["chevaux"])}</small></span><b>{pct(x["chance"])}</b></div>' for x in liste)
 
 
 def selection_html(lignes):
-    """Les 3 courses du jour : le pari proposé, l'arrivée estimée et les chances d'être placé."""
-    medailles, cartes = {1: "🥇", 2: "🥈", 3: "🥉"}, []
-    for rang, x in enumerate(lignes, 1):
+    """Les 3 paris du jour : le strict nécessaire, le reste replié."""
+    cartes = []
+    for x in lignes:
         f = decision.FEUX[x["feu"]]
-        mise = (f'💶 Mise conseillée : <b>{euros(x["mise"])}</b> au maximum · coût moyen ≈ {euros(x["cout"])}'
-                if x["mise"] else "✋ Pas de mise : budget ou limite de 3 paris par jour atteints")
-        arrivee = "".join(
-            f'<tr><td>{medailles.get(o["rang"], o["rang"])}</td><td><b>{escape(str(o["num"]))}</b></td>'
-            f'<td class="tm-cheval">{escape(str(o["nom"]))}</td><td>{pct(o["victoire"])}</td>'
-            f'<td>{pct(o["place"])}</td></tr>' for o in x["arrivee"])
-        trio = (f'<div class="tm-sous tm-detail">🎰 Ces 3 premiers dans le désordre : <b>{pct(x["trio"][0])}</b></div>'
-                if x["trio"] else "")
-        autres = " · ".join(f'{escape(p["pari"])} {escape(p["chevaux"])} : <b>{pct(p["chance"])}</b>'
-                            for p in x["pronostics"] if p["code"] != "SIMPLE_PLACE")
-        autres = f'<div class="tm-sous tm-detail">📊 Aussi au-dessus de 30 % : {autres}</div>' if autres else ""
+        mise = mise_texte(x["mise"]) if x["mise"] else "✋ <b>Ne pas jouer.</b> Budget ou limite du jour atteints."
+        autres = [p for p in x["pronostics"] if p["code"] != "SIMPLE_PLACE"]
+        plus = (f'<details class="tm-plus"><summary>Autres paris au-dessus de 30 %</summary>{pronostics_html(autres)}'
+                '</details>' if autres else "")
         cartes.append(
-            f'<div class="tm-carte"><div class="tm-sous">{rang}. {f["emoji"]} <b>{escape(x["heure"])} · '
-            f'{escape(x["course"])} {escape(x["hippodrome"])}</b> · {x["partants"]} partants</div>'
-            f'<div class="tm-pari-jour"><span>🏅 {escape(x["favori"])} PLACÉ</span><b>{pct(x["place"])}</b></div>'
-            f'<div class="tm-sous">{mise}</div>'
-            f'<table class="tm-arrivee"><tr><th colspan="3">🏁 Arrivée estimée</th><th>Gagne</th>'
-            f'<th>Placé ({x["places_payees"]})</th></tr>{arrivee}</table>{trio}{autres}</div>')
+            f'<div class="tm-carte tm-bord-{x["feu"]}"><div class="tm-quand"><b>{escape(x["heure"])}</b> '
+            f'{escape(x["hippodrome"])} · {escape(x["course"])}</div>'
+            f'<div class="tm-fiabilite">{f["emoji"]} {f["titre"]}</div>'
+            f'<div class="tm-pari-jour"><span>🏅 {escape(x["favori"])} placé</span><b>{pct(x["place"])}</b></div>'
+            f'<div class="tm-mise">{mise}</div>'
+            f'<div class="tm-titre-arrivee"><span>🏁 Arrivée estimée</span><span>chances d\'être placé</span></div>'
+            f'{arrivee_html(x["arrivee"][:3])}{plus}</div>')
     return "".join(cartes)
 
 
 def jour_html(lignes):
+    """Les autres courses : une ligne chacune."""
     html = []
-    for rang, x in enumerate(lignes, 1):
-        if x["mise"]:
-            conseil = (f'💡 Conseil : {escape(x["favori"])} placé · <b>mise conseillée {euros(x["mise"])}</b> '
-                       f'(coût moyen ≈ {euros(x["cout"])})')
-        elif x["feu"] == "rouge":
-            conseil = "✋ Conseil : passer, course trop ouverte"
-        else:
-            conseil = "✋ Pas de mise conseillée : 3 paris par jour au plus, dans le budget"
-        paris = " · ".join(f'{escape(p["pari"])} {escape(p["chevaux"])} : <b>{pct(p["chance"])}</b>'
-                           for p in x["pronostics"]) or "aucun pari au-dessus de 30 %"
+    for x in lignes:
+        detail = "ne pas jouer" if x["feu"] == "rouge" else f'{escape(x["favori"])} placé'
         html.append(
-            f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-rang">{rang} {decision.FEUX[x["feu"]]["emoji"]}</span>'
-            f'<span class="tm-num">{escape(x["heure"])}</span><span class="tm-nom">{escape(x["course"])} '
-            f'{escape(x["hippodrome"])}</span><span class="tm-pct">{pct(x["place"])}</span></div>'
-            f'<div class="tm-sous">favori {escape(x["favori"])} · gagner {pct(x["victoire"])} · être placé '
-            f'{pct(x["place"])} · {x["partants"]} partants</div>'
-            f'<div class="tm-sous tm-detail">{conseil}</div>'
-            f'<div class="tm-sous tm-detail">📊 Plus de 30 % : {paris}</div></div>')
+            f'<div class="tm-ligne tm-tete"><span>{decision.FEUX[x["feu"]]["emoji"]}</span>'
+            f'<span class="tm-course"><b>{escape(x["heure"])}</b> {escape(x["hippodrome"])} · {escape(x["course"])}'
+            f'<small>{detail}</small></span><span class="tm-pct">{pct(x["place"])}</span></div>')
     return "".join(html)
 
 
@@ -562,9 +529,8 @@ def risque_html(r):
 
 # --- 3. INTERFACE ---
 st.title("🚦 TurfMaster")
-st.markdown("**Aide à la décision** · le feu éclaire, vous décidez")
-st.info("🎲 **Aucun avantage sur les autres parieurs n'a été démontré.** Les conseils désignent le pari le plus "
-        "probable, pas un pari rentable : testés, ils perdent en moyenne. Ne misez que ce que vous acceptez de perdre.")
+st.markdown("**Aide à la décision**")
+st.caption("🎲 Aucun pari testé n'est rentable. Ne misez que ce que vous acceptez de perdre.")
 
 with st.sidebar:
     budget_semaine = st.number_input("💶 Mon budget maximum sur 7 jours (€)", value=20, min_value=0,
@@ -625,30 +591,24 @@ with onglet_course:
     if not df.empty:
         if terminee:
             st.caption("⏱️ Course déjà partie : ces cotes sont celles de la clôture, inconnues au moment de parier.")
-        st.markdown(feu_html(ordre), unsafe_allow_html=True)
-
-    if not ordre.empty:
         offerts = course_pmu.get("paris") if course_pmu else None
-        if not terminee:
+        conseil = None
+        if not ordre.empty and not terminee:
             conseil = decision.conseiller(ordre, budget_semaine, deja_mise,
                                           paris_du_jour if jour == pmu.aujourd_hui() else 0, offerts)
-            st.markdown(conseil_html(conseil), unsafe_allow_html=True)
-        st.markdown("#### 📊 Pronostics à plus de 30 %")
-        liste = decision.pronostics(ordre, offerts)
-        if liste:
-            st.markdown(pronostics_html(liste), unsafe_allow_html=True)
-        else:
-            st.caption("Aucun pari ne dépasse 30 % de chances sur cette course.")
-        if not offerts:
-            st.caption("Liste des paris de la course inconnue : seuls les paris Simples sont calculés.")
-        st.markdown("#### 🏁 Podium estimé d'après les cotes")
-        st.markdown(podium_html(ordre), unsafe_allow_html=True)
-        trio = decision.chances_trio(ordre)
-        if trio:
-            st.caption(f"🎰 Ces trois premiers dans le désordre : **{trio[0] * 100:.1f} %** de chances. "
-                       f"Dans cet ordre exact : **{trio[1] * 100:.1f} %**. En moyenne, sur les courses passées de cette "
-                       f"couleur : **{decision.REPERES[decision.feu(ordre)]['trio'] * 100:.1f} %** dans le désordre.")
+        st.markdown(feu_html(ordre, conseil), unsafe_allow_html=True)
 
+    if not ordre.empty:
+        st.markdown('<div class="tm-titre-arrivee"><span>🏁 Arrivée estimée</span><span>chances d\'être placé</span></div>'
+                    + arrivee_html(decision.chances_affichees(ordre).head(5).to_dict("records")), unsafe_allow_html=True)
+        with st.expander("📊 Paris au-dessus de 30 %"):
+            liste = decision.pronostics(ordre, offerts)
+            if liste:
+                st.markdown(pronostics_html(liste), unsafe_allow_html=True)
+            else:
+                st.caption("Aucun sur cette course.")
+            if not offerts:
+                st.caption("Course collée ou paris inconnus : seuls les paris Simples sont calculés.")
         with st.expander("🎲 Si je parie, qu'est-ce que je risque ?"):
             c1, c2, c3 = st.columns(3)
             type_pari = c1.selectbox("Pari", [decision.GAGNANT, decision.PLACE], index=None, placeholder="Choisir")
@@ -796,7 +756,8 @@ with onglet_course:
                                "(risque d'invention).")
 
 with onglet_jour:
-    st.caption("🟢 course claire · 🟠 disputée · 🔴 très ouverte. Le feu mesure le suspense, pas la rentabilité.")
+    st.caption("  \n".join(f"{f['emoji']} **{f['titre']}** ({f['sur10']} favoris placés sur 10)"
+                           for f in decision.FEUX.values()))
     if st.button("🔎 EXPLORER LES COURSES DU JOUR (gratuit)", width="stretch"):
         try:
             with st.spinner("🐎 Lecture de toutes les courses (environ 30 secondes)..."):
@@ -811,27 +772,24 @@ with onglet_jour:
         # une liste gardée à l'écran ne doit pas conseiller une course déjà partie
         restantes = [x for x in feux["lignes"] if not pmu.depart_passe(x, feux["jour"])]
         if restantes:
-            compte = " · ".join(f"{f['emoji']} {sum(x['feu'] == c for x in restantes)}"
-                                for c, f in decision.FEUX.items())
-            st.markdown(f"#### {compte}")
-            st.caption(f"Cotes de {feux['heure']}, classées par chances du favori d'être placé. Elles bougeront : "
-                       "actualisez avant de décider.")
             classees = decision.repartir(restantes, budget_semaine, deja_mise, paris_du_jour)
             choisies = decision.selectionner(classees)
-            st.markdown("### 🏆 Les 3 courses du jour et leurs paris les plus sûrs")
+            st.markdown("### 🏆 Les 3 paris du jour")
             if choisies:
-                r = decision.REPERE_SELECTION
-                st.warning(f"**Le plus sûr n'est pas rentable.** Sur 60 jours, ces paris sont passés "
-                           f"{pct(r['place'])} du temps ({pct(r['place_novembre'])} en novembre) et ont perdu "
-                           f"{pct(r['perte'])} des mises. Les trois passent ensemble {pct(r['trois_passent'])} des jours.")
+                st.caption("Les plus probables, **pas rentables** : pour 10 € joués, "
+                           f"{euros(decision.REPERE_SELECTION['perte'] * 10)} perdus en moyenne. "
+                           f"Cotes de {feux['heure']}, à actualiser avant le départ.")
                 st.markdown(selection_html(choisies), unsafe_allow_html=True)
                 if len(choisies) < decision.NB_SELECTION:
-                    st.caption(f"Seulement {len(choisies)} course(s) assez lisible(s) encore à venir : "
-                               "je ne complète pas avec une course 🔴.")
+                    st.caption("Je ne complète pas avec une course 🔴.")
             else:
-                st.caption("✋ Aucune course assez lisible parmi celles qui restent : mieux vaut passer.")
-            st.markdown("### 📋 Toutes les courses à venir")
-            st.markdown(jour_html(classees), unsafe_allow_html=True)
+                st.markdown("✋ **Ne pas jouer** : aucune estimation assez fiable parmi les courses restantes.")
+            ids = {x["course"] for x in choisies}
+            autres = [x for x in classees if x["course"] not in ids]
+            if autres:
+                with st.expander(f"📋 Voir les {len(autres)} autres courses"):
+                    st.caption("Chances du favori d'être placé. Aucune mise conseillée sur ces courses.")
+                    st.markdown(jour_html(autres), unsafe_allow_html=True)
         else:
             st.caption("Plus aucune course française à venir aujourd'hui.")
 
@@ -910,4 +868,4 @@ with onglet_carnet:
         st.info(st.session_state.pop("compte_rendu_test"))
 
 st.divider()
-st.caption("🚦 Le feu dit si la course est lisible · 🎲 vous décidez · 📒 le carnet dit la vérité")
+st.caption("🚦 Le feu note l'estimation, pas le gain · 📒 le carnet dit la vérité")

@@ -32,7 +32,7 @@ réunions, ne sont pas couvertes. Seuils des feux et paris testés fixés avant 
 | 🔴 très ouverte | 584 | 17,9 % | 19,9 % | 43,1 % | 40,9 % | 4,5 % |
 
 Le feu distingue bien les courses lisibles des courses ouvertes. Le calcul surestime les favoris des
-courses claires, et sous-estime le trio des trois préférés : l'application affiche aussi le constat réel.
+courses claires, et sous-estime le trio des trois préférés : l'application corrige les deux.
 
 **Paris sur les chevaux préférés, 1 € par pari, rapports officiels :**
 
@@ -63,11 +63,11 @@ pari gagnant, donc du hasard. Multi et Tiercé ne figurent pas dans ce tableau (
 
 | Feu | Chances du favori de gagner | Sens |
 |---|---|---|
-| 🟢 Course claire | au moins 35 % | un favori se détache |
-| 🟠 Course disputée | de 22 à 35 % | un favori, de vrais rivaux |
-| 🔴 Course très ouverte | moins de 22 % | surprise possible |
+| 🟢 Estimation fiable | au moins 35 % | favori placé 7 fois sur 10 |
+| 🟠 Estimation correcte | de 22 à 35 % | favori placé 6 fois sur 10 |
+| 🔴 Peu fiable : ne pas jouer | moins de 22 % | favori placé 4 fois sur 10 |
 
-**Un feu vert ne veut pas dire « rentable »** : il mesure le suspense, pas la rentabilité.
+**« Fiable » parle de l'estimation, jamais du gain. Un feu vert ne veut pas dire « rentable »** : il mesure le suspense, pas la rentabilité.
 
 ### Les 3 courses du jour et leurs 3 paris
 

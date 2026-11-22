@@ -20,9 +20,10 @@ LAMBDA_2E, LAMBDA_3E = 0.81, 0.65
 # Le feu dit si la course est LISIBLE, jamais si elle est rentable. Seuils fixés avant de les mesurer.
 SEUIL_VERT, SEUIL_ORANGE = 0.35, 0.22
 FEUX = {
-    "vert": {"emoji": "🟢", "titre": "COURSE CLAIRE", "phrase": "Un favori se détache nettement."},
-    "orange": {"emoji": "🟠", "titre": "COURSE DISPUTÉE", "phrase": "Un favori, mais de vrais rivaux."},
-    "rouge": {"emoji": "🔴", "titre": "COURSE TRÈS OUVERTE", "phrase": "Aucun cheval ne se détache : surprise possible."},
+    # « fiable » parle de l'estimation, pas du gain : favori placé 7, 6 et 4 fois sur 10 selon le feu
+    "vert": {"emoji": "🟢", "titre": "Estimation fiable", "sur10": 7},
+    "orange": {"emoji": "🟠", "titre": "Estimation correcte", "sur10": 6},
+    "rouge": {"emoji": "🔴", "titre": "Peu fiable : ne pas jouer", "sur10": 4},
 }
 
 # Mesuré du 22/09 au 20/11/2026 sur 1 774 courses PMU, avec des cotes horodatées au moins 10 min avant le
@@ -213,13 +214,13 @@ def conseiller(ordre, budget, deja_mise, paris_du_jour=0, offerts=None):
     if offerts and "SIMPLE_PLACE" not in offerts:
         raison = "Le Simple Placé n'est pas proposé sur cette course."
     elif couleur == "rouge":
-        raison = "Course trop ouverte : le favori placé y perd 22 % de la mise en moyenne."
+        raison = "Aucun cheval ne se détache."
     elif paris_du_jour >= PARIS_PAR_JOUR:
-        raison = f"Déjà {PARIS_PAR_JOUR} paris notés aujourd'hui : c'est le maximum conseillé."
+        raison = f"Déjà {PARIS_PAR_JOUR} paris aujourd'hui."
     else:
         mise = mise_conseillee(couleur, budget, deja_mise)
         if not mise:
-            raison = "Votre budget des 7 jours ne permet plus de pari."
+            raison = "Budget de la semaine atteint."
     return {"num": ordre.iloc[0]["num"], "nom": ordre.iloc[0]["nom"], "chance": chances_favori(ordre)[1],
             "mise": mise, "cout": mise * PERTE_PLACE[couleur], "raison": raison}
 

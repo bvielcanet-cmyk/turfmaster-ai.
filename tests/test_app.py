@@ -182,15 +182,16 @@ def test_feu_et_podium_sans_aucune_requete_gemini():
     at, p = demarrer(course=1)
     assert p.call_count == 0 and not at.exception
     assert any(f["emoji"] in feu(at) for f in decision.FEUX.values())
-    assert "🥇" in classement(at) and "🥉" in classement(at)
-    assert any("Aucun avantage" in i for i in textes(at.info))
+    ecran = " ".join(textes(at.markdown))
+    assert "🥇" in ecran and "🥉" in ecran
+    assert any("Aucun pari testé n'est rentable" in c for c in textes(at.caption))
 
 
 def test_conseil_honnete_et_rien_de_preselectionne():
     at, _ = lancer([http()], presse=PRESSE)
     ecran = " ".join(textes(at.markdown) + textes(at.caption) + textes(at.info) + textes(at.success)
                      + [b.label for b in at.button] + [m.label for m in at.metric])
-    assert "Mise conseillée" in ecran and "pas un pari gagnant" in ecran
+    assert "Mise conseillée" in ecran and "Aucun pari testé n'est rentable" in ecran
     for interdit in ("À JOUER", "JEU POSSIBLE", "ONE SHOT", "Kelly", "+22"):
         assert interdit not in ecran
     # rien n'est présélectionné : ni pari, ni cheval, ni mise
@@ -201,7 +202,7 @@ def test_conseil_honnete_et_rien_de_preselectionne():
 def test_pas_de_feu_sans_cotes():
     at, _ = lancer([http(json_={"chevaux": [{"num": "5", "p": 60}, {"num": "4", "p": 40}]})],
                    texte="5 LOKI 1s 2s\n4 FOREST 1s 3s 5.8", recherche=False)
-    assert "PAS ENCORE DE FEU" in feu(at) and not at.exception
+    assert "PAS D'ESTIMATION" in feu(at) and not at.exception
 
 
 def test_sans_recherche_un_seul_appel():
@@ -309,7 +310,7 @@ def test_risque_du_pari_choisi(pari, gain):
 
 def test_aucun_conseil_sur_une_course_partie():
     at, _ = demarrer(course=0)
-    assert "CONSEIL" not in " ".join(m for m in textes(at.markdown) if "tm-verdict" in m)
+    assert "Mise conseillée" not in feu(at) and "Ne pas jouer" not in feu(at)
 
 
 def test_budget_epuise_conseille_de_passer():
@@ -317,7 +318,7 @@ def test_budget_epuise_conseille_de_passer():
     joues = pd.DataFrame([{"date": recent, "pari": "Simple Placé", "mise": 20, "resultat": "Perdu"}])
     at, _ = demarrer(FauxSheets(TurfMaster=joues), course=1)
     ecran = " ".join(textes(at.markdown))
-    assert "CONSEIL : PASSER" in ecran and "Mise conseillée" not in ecran
+    assert "Ne pas jouer" in ecran and "Mise conseillée" not in ecran
 
 
 def test_budget_depasse():
@@ -366,10 +367,10 @@ def test_courses_du_jour_sans_gemini():
     with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p:
         bouton(at, "EXPLORER LES COURSES").click().run()
     assert p.call_count == 0 and not at.exception
-    assert any("R1C2" in m and "favori" in m and "Conseil" in m and "Plus de 30" in m for m in textes(at.markdown))
+    assert any("R1C2" in m and "%" in m for m in textes(at.markdown))
     ecran = " ".join(textes(at.markdown) + textes(at.warning) + textes(at.caption))
-    assert "Les 3 courses du jour" in ecran and "Toutes les courses" in ecran
-    assert ("Arrivée estimée" in ecran and "pas rentable" in ecran) or "mieux vaut passer" in ecran
+    assert "Les 3 paris du jour" in ecran
+    assert ("Arrivée estimée" in ecran and "pas rentables" in ecran) or "Ne pas jouer" in ecran
 
 
 # --- Programme PMU, arrivées et mesure -----------------------------------------
