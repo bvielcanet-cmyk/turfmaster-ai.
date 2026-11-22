@@ -147,6 +147,25 @@ prometteuses** et répartit un **budget de 20 à 100 €** selon le profil :
 Le suivi automatique envoie aussi un **résumé du plan sur Telegram vers 11 h** (variables GitHub
 facultatives : `BUDGET`, 50 € par défaut, et `JOKER` = `oui` pour l'inclure).
 
+#### 🎯 Mode « one shot » (par défaut)
+
+Le budget de 20 à 100 € est **joué une seule fois**, sans lien avec un capital : vous acceptez de le
+perdre. Prudent et Équilibré : 3 Placés ; Offensif : 2.
+
+- **Répartition optimisée** : les mises sont réparties pour **maximiser les chances de finir en
+  gain** (plus sur le Placé le plus sûr), au lieu de parts égales. Sur 15 000 plans passés de 3
+  Placés : 68 % finis en gain au lieu de 56 %, au même risque de tout perdre (10 %).
+- **Feu tricolore**, selon le risque de tout perdre (calculé puis corrigé : le calcul brut est trop
+  optimiste, réel ≈ 1,3 à 1,4 × calculé ; correction apprise sur sept.-oct., vérifiée sur novembre) :
+  🟢 **jeu possible** (≤ 10 %), 🟠 **risque élevé** (≤ 25 %, à vous de décider), 🔴 **ne pas jouer
+  aujourd'hui** (au-delà, ou moins de 2 Placés intéressants).
+- Les chances de finir en gain ne sont pas annoncées plan par plan (le calcul ne distingue pas
+  fiablement les bons plans des autres) : sur un feu vert, la moyenne observée est d'environ
+  **2 sur 3**.
+- Même au feu vert, environ 1 plan sur 12 perd tout et un tiers finissent en perte.
+
+Le mode **📈 Dans la durée** garde le fonctionnement précédent (mises selon le capital et sa protection).
+
 ### 🤖 Suivi automatique et alertes Telegram
 
 Le fichier `.github/workflows/suivi.yml` lance `suivi_auto.py` **toutes les 10 minutes de 10 h à

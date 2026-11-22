@@ -169,3 +169,66 @@ def texte_plan(plan, budget, profil, vus, jok=None):
     total = plan["mise"].sum() + (jok["mise"] if jok else 0)
     lignes.append(f"Total : {total:.2f} € sur {budget:.0f} €. 🧪 Phase de test : à blanc.")
     return "\n".join(lignes)
+
+
+# --- Mode « one shot » : un budget joué une seule fois -------------------------------------------
+#
+# Études sur les conseils Placé passés (cote Gagnant < 8), budget joué une fois sur 2 ou 3 Placés :
+#  - répartir les mises pour maximiser les chances de finir en gain (au lieu de parts égales) fait
+#    passer la part des plans finis en gain de 56 % à 68 %, au même risque de tout perdre ;
+#  - le risque de tout perdre calculé d'avance est trop optimiste : réel ≈ 1,29 × calculé (2 paris),
+#    1,38 × calculé (3 paris) ; correction apprise sur sept.-oct., vérifiée sur novembre ;
+#  - les chances de gain calculées pour UN plan ne permettent pas de distinguer les bons plans des
+#    autres ; en moyenne, les plans optimisés ont fini en gain environ 2 fois sur 3.
+
+import itertools
+
+PARIS_ONE_SHOT = {"Prudent": 3, "Équilibré": 3, "Offensif": 2}
+CORRECTION_PERTE = {1: 1.3, 2: 1.29, 3: 1.38}
+GAIN_OBSERVE = 2 / 3
+FEU_VERT, FEU_ORANGE = 0.10, 0.25  # risque corrigé de tout perdre
+
+
+def chances_calculees(probas, cotes, parts):
+    """(risque de tout perdre, chances de finir en gain) calculés, rapport = cote Placé minimale."""
+    probas, cotes, parts = map(lambda x: np.asarray(x, dtype=float), (probas, cotes, parts))
+    perte, gain = float(np.prod(1 - probas)), 0.0
+    for issue in itertools.product([0, 1], repeat=len(probas)):
+        issue = np.array(issue)
+        if (parts * cotes * issue).sum() > 1:
+            gain += float(np.prod(np.where(issue, probas, 1 - probas)))
+    return perte, gain
+
+
+def repartition_optimale(probas, cotes):
+    """Parts du budget qui maximisent les chances calculées de finir en gain (puis le gain espéré)."""
+    grille = [np.array(w) / sum(w) for w in itertools.product(range(1, 7), repeat=len(probas))]
+    return max(grille, key=lambda w: (round(chances_calculees(probas, cotes, w)[1], 9),
+                                      float((w * np.asarray(probas) * np.asarray(cotes)).sum())))
+
+
+def one_shot(conseils, budget, profil):
+    """Plan « one shot » : (paris avec mises, bilan). Le bilan contient le feu (« vert », « orange »,
+    « rouge »), le risque corrigé de tout perdre, le gain espéré calculé et le total misé."""
+    paris = selectionner(conseils, profil, PARIS_ONE_SHOT[profil])
+    for _ in range(PARIS_ONE_SHOT[profil]):
+        if paris.empty:
+            break
+        parts = repartition_optimale(paris["proba_corrigee"], paris["cote_min"])
+        mises = np.floor(parts * budget / 0.5) * 0.5
+        if (mises >= MISE_MIN).all():
+            break
+        paris = paris.drop(paris.index[int(np.argmin(mises))]).reset_index(drop=True)  # mise trop petite : on retire
+    if len(paris) < 2:
+        raison = ("moins de 2 Placés intéressants aujourd'hui" if len(paris) < 2 and budget >= 2 * MISE_MIN
+                  else "budget trop petit pour 2 paris")
+        return paris.assign(mise=[0.0] * len(paris)), {"feu": "rouge", "raison": raison, "n": len(paris)}
+    paris = paris.assign(mise=mises.astype(float))
+    perte, _ = chances_calculees(paris["proba_corrigee"], paris["cote_min"], parts)
+    risque = min(perte * CORRECTION_PERTE[len(paris)], 1.0)
+    esperance = float((paris["mise"] * paris["proba_corrigee"] * paris["cote_min"]).sum() / paris["mise"].sum() - 1)
+    feu = "vert" if risque <= FEU_VERT else "orange" if risque <= FEU_ORANGE else "rouge"
+    raison = {"vert": "jeu possible", "orange": "risque élevé : à vous de décider",
+              "rouge": "risque de tout perdre trop élevé"}[feu]
+    return paris, {"feu": feu, "raison": raison, "n": len(paris), "risque_tout_perdre": risque,
+                   "gain_espere": esperance, "total": float(paris["mise"].sum()), "gain_observe": GAIN_OBSERVE}

@@ -645,8 +645,14 @@ def test_pas_de_conseil_place():
 
 # --- Plan du jour --------------------------------------------------------------------------
 
+def mode_plan(at, texte):
+    radio = [r for r in at.radio if any("One shot" in str(o) for o in r.options)][0]
+    radio.set_value([o for o in radio.options if texte in str(o)][0]).run()
+
+
 def test_plan_du_jour(tmp_path):
     at, _ = lancer([], texte="", recherche=False)
+    mode_plan(at, "Dans la durée")
     with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as post, \
             mock.patch("plan.minutes_avant", return_value=60):
         bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
@@ -687,3 +693,37 @@ def test_sans_baisse_mises_normales():
         at.radio[0].set_value("📅 Programme PMU").run()
         bouton(at, "CONSEIL PLACÉ").click().run()
     assert "10,00" in conseil_html(at)
+
+
+
+# --- Mode one shot ---------------------------------------------------------------------------
+
+def test_one_shot_feu_et_repartition():
+    from test_plan import conseils_types
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("plan.cribler", return_value=(conseils_types(), 9)):
+        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
+    feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
+    assert "JEU POSSIBLE" in feu or "RISQUE ÉLEVÉ" in feu
+    assert "Risque de tout perdre" in feu and "2 sur 3" in feu
+    plan_txt = " ".join(m.value for m in at.markdown if "tm-ligne" in m.value)
+    assert plan_txt.count("Placé n°") == 3  # Équilibré : 3 Placés
+
+
+def test_one_shot_rouge_si_moins_de_deux_paris():
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("plan.minutes_avant", return_value=60):
+        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
+    feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
+    assert "NE PAS JOUER AUJOURD" in feu and "Moins de 2 Placés" in feu
+
+
+
+def test_one_shot_rouge_sans_promesse_de_gain():
+    from test_plan import conseils_types
+    risques = conseils_types().assign(proba_corrigee=.2, cote_min=6.0, valeur=.2)
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("plan.cribler", return_value=(risques, 9)):
+        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
+    feu = " ".join(m.value for m in at.markdown if "tm-verdict" in m.value)
+    assert "NE PAS JOUER" in feu and "de risque de tout perdre" in feu and "2 sur 3" not in feu
