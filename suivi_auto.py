@@ -13,6 +13,10 @@ Configuration (variables d'environnement, à mettre dans les secrets du dépôt 
   TELEGRAM_BOT_TOKEN  : jeton du bot Telegram (facultatif)
   TELEGRAM_CHAT_ID    : identifiant de la conversation Telegram (facultatif)
   CAPITAL, PROFIL     : pour la mise affichée (par défaut 1000 et Équilibré)
+  BUDGET, JOKER       : budget du plan du jour (50 € par défaut) et joker outsider (« oui » pour l'ajouter)
+
+Entre 11 h 00 et 11 h 09, un résumé du « plan du jour » (3 meilleures courses, budget réparti selon
+le profil) est aussi envoyé sur Telegram.
 
 Sans GSHEETS_CREDENTIALS, le script tourne « à sec » : il affiche les conseils sans rien enregistrer.
 """
@@ -27,7 +31,9 @@ import requests
 
 import mesure
 import place
+import plan
 import pmu
+import protection
 
 FEUILLE = "ConseilsPlace"
 AVANCE_MIN, AVANCE_MAX = 3, 20  # minutes avant le départ
@@ -169,6 +175,14 @@ def message_bilan(regles, suivi):
     return "🏁 <b>Résultats</b>\n" + "\n".join(lignes) + resume
 
 
+def plan_du_jour(maintenant, profil, facteur=1.0):
+    budget = float(os.environ.get("BUDGET", 50)) * facteur
+    conseils, vus = plan.cribler(maintenant.date(), maintenant, pause=0.3)
+    selection, jok = plan.composer(conseils, budget, profil,
+                                   os.environ.get("JOKER", "").lower() in ("oui", "1", "true"))
+    return plan.texte_plan(selection, budget, profil, vus, jok)
+
+
 def main():
     maintenant = datetime.now(tz=pmu.PARIS)
     capital = float(os.environ.get("CAPITAL", 1000))
@@ -177,8 +191,17 @@ def main():
     if feuille is None:
         print("GSHEETS_CREDENTIALS absent : passage « à sec », rien n'est enregistré.", flush=True)
     suivi = lire(feuille)
-    suivi, messages = relever_conseils(suivi, maintenant, capital, profil)
+    # Protection automatique : capital fictif du suivi à blanc, mises divisées par 2 après -15 %
+    etat = protection.etat_courant(capital, None, suivi)
+    if etat["reduit"]:
+        print(f"Protection active : capital {etat['capital']:.2f} €, {etat['baisse']:.0%} sous le plus haut.", flush=True)
+    suivi, messages = relever_conseils(suivi, maintenant, etat["capital"] * etat["facteur"], profil)
     suivi, regles = regler_attente(suivi)
+    if maintenant.hour == 11 and maintenant.minute < 10:
+        texte = plan_du_jour(maintenant, profil, etat["facteur"])
+        if etat["reduit"]:
+            texte += f"\n🛡️ Protection active : mises divisées par 2 (capital {etat['baisse']:.0%} sous son plus haut)."
+        messages.insert(0, texte)
     if messages or regles:
         ecrire(feuille, suivi)
     for m in messages:

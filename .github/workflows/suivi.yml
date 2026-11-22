@@ -30,3 +30,5 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CAPITAL: ${{ vars.CAPITAL || '1000' }}
           PROFIL: ${{ vars.PROFIL || 'Équilibré' }}
+          BUDGET: ${{ vars.BUDGET || '50' }}
+          JOKER: ${{ vars.JOKER || 'non' }}

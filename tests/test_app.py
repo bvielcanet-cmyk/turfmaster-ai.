@@ -125,9 +125,9 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
             if profil:
                 at.select_slider[0].set_value(profil)
             if not recherche:
-                at.toggle[0].set_value(False)
+                interrupteur(at, "Recherche Google").set_value(False)
             if presse is None:
-                at.toggle[1].set_value(False)  # pronostics de la presse désactivés par défaut dans les tests
+                interrupteur(at, "Pronostics de la presse").set_value(False)  # désactivés par défaut
             if discipline:
                 [sb for sb in at.selectbox if sb.label == "Discipline"][0].set_value(discipline)
             if limite is not None:
@@ -136,6 +136,10 @@ def lancer(reponses=None, exc=None, texte=SITE, secrets=True, sheets=None, profi
                 at.text_area[0].input(texte)
             analyser(at).click().run()
     return at, p
+
+
+def interrupteur(at, texte):
+    return [t for t in at.toggle if texte in t.label][0]
 
 
 def analyser(at):
@@ -636,3 +640,50 @@ def test_pas_de_conseil_place():
         at.radio[0].set_value("📅 Programme PMU").run()
         bouton(at, "CONSEIL PLACÉ").click().run()
     assert "Pas de Placé intéressant" in conseil_html(at)
+
+
+
+# --- Plan du jour --------------------------------------------------------------------------
+
+def test_plan_du_jour(tmp_path):
+    at, _ = lancer([], texte="", recherche=False)
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as post, \
+            mock.patch("plan.minutes_avant", return_value=60):
+        bouton(at, "ANALYSER TOUTES LES COURSES DU JOUR").click().run()
+    assert post.call_count == 0  # crible gratuit
+    html = " ".join(m.value for m in at.markdown if "tm-ligne" in m.value or "Aucune course prometteuse" in m.value)
+    assert "Placé n° 6 STINGO" in html and "25,00" in html  # 1 course retenue : 50 % du budget de 50 €
+    assert any("1 avec un Placé intéressant" in c for c in textes(at.caption))
+
+    # Approfondissement par l'IA (1 requête) : avis informatif
+    with mock.patch("requests.get", side_effect=faux_get), \
+            mock.patch("requests.post", side_effect=gemini_simule([http(json_=IA_PMU)])) as post:
+        bouton(at, "Approfondir avec l'IA").click().run()
+    assert post.call_count == 1
+    assert any("🔬 R1C2 n° 6" in c and "IA" in c for c in textes(at.caption)), textes(at.caption)
+
+
+
+# --- Protection des mises -----------------------------------------------------------------
+
+def test_protection_divise_les_mises_apres_une_baisse():
+    # Tickets joués : +200 puis -190 -> capital 1010, 16 % sous le plus haut (1200) : mises divisées par 2
+    feuille = FauxSheets(TurfMaster=pd.DataFrame([
+        {**historique((maintenant(3), 10, "Gagné", 210)).iloc[0].to_dict()},
+        {**historique((maintenant(2), 190, "Perdu", 0)).iloc[0].to_dict()},
+    ]))
+    at, _ = lancer([], texte="", sheets=feuille, recherche=False)
+    assert any("Protection active" in w for w in textes(at.warning)), textes(at.warning)
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("streamlit.connection", return_value=feuille):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert "5,05" in conseil_html(at)  # 1 % de 1010 € = 10,10 €, divisé par 2
+
+
+def test_sans_baisse_mises_normales():
+    at, _ = lancer([], texte="", recherche=False)
+    assert any("Capital actuel" in c for c in textes(at.caption))
+    with mock.patch("requests.get", side_effect=faux_get):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert "10,00" in conseil_html(at)

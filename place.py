@@ -100,7 +100,7 @@ def conseil_place(df, cotes_place, profil, capital, budget_restant=None, regle="
     if budget_restant is not None:
         mise = round(max(min(mise, budget_restant), 0), 2)
     return {"num": str(row["NUM"]), "nom": row["NOM"], "proba": float(probas[i]),
-            "proba_corrigee": float(corrigees[i]), "regle": regle,
+            "proba_corrigee": float(corrigees[i]), "regle": regle, "cote_gagnant": float(row["COTE"]),
             "cote_min": cote_min, "cote_max": cote_max, "gain_espere": float(gain),
             # en dessous de cette cote minimale, le gain espéré passe sous le seuil de la règle
             "cote_mini_a_jouer": round(float((1 + GAIN_ESPERE_MIN) / probas[i]), 2), "mise": mise}
@@ -109,11 +109,12 @@ def conseil_place(df, cotes_place, profil, capital, budget_restant=None, regle="
 # --- Suivi à blanc ---------------------------------------------------------------
 
 COLONNES_SUIVI = ["id", "date", "date_course", "course", "hippodrome", "num", "nom", "proba",
-                  "cote_min", "mise", "resultat", "rapport", "gain", "regle", "source"]
+                  "cote_min", "mise", "resultat", "rapport", "gain", "regle", "source", "cote_gagnant"]
 
 
 def ligne_suivi(identifiant, date, date_course, course, hippo, conseil, source="application"):
     return {"regle": conseil.get("regle", "confirmée"), "source": source,
+            "cote_gagnant": conseil.get("cote_gagnant", 0.0),
             "id": identifiant, "date": date, "date_course": date_course, "course": course,
             "hippodrome": hippo, "num": conseil["num"], "nom": conseil["nom"],
             "proba": round(conseil["proba"], 3), "cote_min": conseil["cote_min"], "mise": conseil["mise"],
@@ -147,13 +148,15 @@ def regler(df, i, arrivee):
     return True
 
 
-def stats_suivi(df, regle=None):
+def stats_suivi(df, regle=None, outsiders=False):
     """Bilan des conseils réglés : rendement pour 1 € par conseil et gain avec les mises conseillées.
     regle : ne compter que cette règle (les anciennes lignes sans règle comptent comme « confirmée »)."""
     if df is None or df.empty:
         return {"n": 0, "en_attente": 0}
     if regle:
         df = df[df["regle"].astype(str).replace("", "confirmée") == regle]
+    if outsiders:  # conseils sur des chevaux de cote Gagnant >= 8 (le « joker outsider »)
+        df = df[pd.to_numeric(df["cote_gagnant"], errors="coerce").fillna(0) >= 8]
     regles = df[df["resultat"].isin(["Placé", "Non placé"])]
     attente = int((df["resultat"] == "En attente").sum())
     n = len(regles)
