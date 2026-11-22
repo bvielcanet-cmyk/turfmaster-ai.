@@ -141,3 +141,16 @@ def test_feu_selon_le_risque():
     risques = c.assign(proba_corrigee=.2, cote_min=6.0, valeur=.2)
     assert plan.one_shot(surs, 50, "Équilibré")[1]["feu"] == "vert"
     assert plan.one_shot(risques, 50, "Équilibré")[1]["feu"] == "rouge"
+
+
+# --- Ordre d'arrivée estimé ------------------------------------------------------------------
+
+def test_ordre_estime():
+    ordre = plan.ordre_estime(PARTANTS)
+    assert list(ordre["rang"]) == list(range(1, len(PARTANTS) + 1))
+    assert ordre["victoire"].is_monotonic_decreasing and ordre["victoire"].sum() == pytest.approx(1)
+    assert ordre["place"].sum() == pytest.approx(2)  # 6 partants : 2 places payées
+    assert ordre.iloc[0]["num"] == "1"  # favori à 3.7
+    sans_cote = PARTANTS.copy()
+    sans_cote.loc[0, "COTE"] = None
+    assert plan.ordre_estime(sans_cote).empty

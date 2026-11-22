@@ -166,6 +166,16 @@ perdre. Prudent et Équilibré : 3 Placés ; Offensif : 2.
 
 Le mode **📈 Dans la durée** garde le fonctionnement précédent (mises selon le capital et sa protection).
 
+#### 🏁 Ordre d'arrivée estimé (information)
+
+Pour chaque course retenue (et sous chaque conseil Placé), l'application affiche l'**ordre d'arrivée
+estimé** d'après les cotes, avec pour chaque cheval ses chances de **gagner** et d'**être placé**.
+C'est une indication des chevaux à surveiller, **pas un pari conseillé** : sur 1 782 courses passées
+de 8 partants ou plus, le 1er estimé a gagné 30 % du temps, le vainqueur était parmi les 3 premiers
+estimés 59 % du temps, mais le trio exact n'est sorti que 6,6 % du temps dans le désordre et
+**1,9 % dans l'ordre** — et les paris combinés rendent beaucoup moins aux parieurs (Couplé ≈ 51 %
+contre ≈ 78 % pour le Placé).
+
 ### 🤖 Suivi automatique et alertes Telegram
 
 Le fichier `.github/workflows/suivi.yml` lance `suivi_auto.py` **toutes les 10 minutes de 10 h à
