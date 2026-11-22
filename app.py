@@ -12,6 +12,7 @@ import streamlit as st
 
 import mesure
 import place
+import protection
 import plan
 import pmu
 import turf_logic as tl
@@ -562,7 +563,9 @@ st.caption("Choisissez une course : l'application vous dit **s'il faut jouer**, 
 with st.sidebar:
     choix_discipline = st.selectbox("Discipline", [AUTO] + tl.DISCIPLINES)
     st.divider()
-    capital = st.number_input("Capital (€)", value=1000, min_value=0)
+    capital_depart = st.number_input("Capital de départ (€)", value=1000, min_value=0,
+                                     help="Le capital actuel en est déduit avec vos résultats (tickets joués, "
+                                          "ou suivi à blanc tant que vous ne jouez pas).")
     profil = st.select_slider("Profil de Risque", list(tl.PROFILS), value="Équilibré")
     regles = tl.PROFILS[profil]
     st.caption(f"Joue seulement si le gain espéré atteint **{regles['ev_min'] * 100:+.0f}\u00a0%** "
@@ -583,6 +586,20 @@ stockage = Stockage(conn)
 analyses_enregistrees, _ = stockage.lire(FEUILLE_ANALYSES, mesure.COLONNES_ANALYSES)
 precision = mesure.scores(analyses_enregistrees)
 confiance, confiance_mesuree = mesure.confiance_ia(precision, tl.CONFIANCE_IA)
+
+# Protection automatique des mises : capital actuel et réduction après une baisse de plus de 15 %
+etat_capital = protection.etat_courant(capital_depart, stockage.lire(FEUILLE, tl.COLONNES_HISTORIQUE)[0],
+                                       stockage.lire(FEUILLE_SUIVI, place.COLONNES_SUIVI)[0])
+capital = etat_capital["capital"] * etat_capital["facteur"]  # capital servant au calcul des mises
+with st.sidebar:
+    if etat_capital["reduit"]:
+        st.warning(f"🛡️ Protection active : capital {euros(etat_capital['capital'])}, "
+                   f"{etat_capital['baisse']:.0%} sous son plus haut ({euros(etat_capital['pic'])}). "
+                   "Mises divisées par 2 jusqu'à ce qu'il remonte.")
+    else:
+        st.caption(f"🛡️ Capital actuel : **{euros(etat_capital['capital'])}** (plus haut "
+                   f"{euros(etat_capital['pic'])}, d'après le {etat_capital['source']}). Les mises seront "
+                   f"divisées par 2 si le capital baisse de plus de {protection.SEUIL_BAISSE:.0%}.")
 # La clé garde l'onglet ouvert quand la page se recharge (après un clic sur un bouton)
 onglet_prono, onglet_plan, onglet_histo = st.tabs(["🎯 Pronostic", "📅 Plan du jour", "📊 Historique"],
                                                   key="onglet")
@@ -832,7 +849,11 @@ with onglet_plan:
     pl = st.session_state.get("plan")
     if pl:
         conseils_jour = pl["conseils"]
-        sel, jok = plan.composer(conseils_jour, budget_jour, profil, avec_joker, budget_pertes())
+        budget_effectif = budget_jour * etat_capital["facteur"]
+        if etat_capital["reduit"]:
+            st.warning(f"🛡️ Protection active : budget ramené à {euros(budget_effectif)} "
+                       f"(capital {etat_capital['baisse']:.0%} sous son plus haut).")
+        sel, jok = plan.composer(conseils_jour, budget_effectif, profil, avec_joker, budget_pertes())
         st.caption(f"Analyse de {pl['heure']} : {pl['vus']} courses à venir, "
                    f"{conseils_jour['course'].nunique() if not conseils_jour.empty else 0} avec un Placé intéressant.")
         st.markdown(plan_html(sel, jok, budget_jour, profil), unsafe_allow_html=True)

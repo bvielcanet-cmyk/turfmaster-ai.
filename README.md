@@ -97,6 +97,26 @@ temps. Au-delà de 1,5 % du capital par conseil, les baisses deviennent brutales
 
 Les chances de placé affichées utilisent la formule corrigée, plus réaliste.
 
+#### 🛡️ Protection automatique des mises
+
+Les mises sont un pourcentage du **capital actuel** (capital de départ + résultats des tickets joués,
+ou du suivi à blanc tant que vous ne jouez pas). **Dès que le capital est à plus de 15 % sous son plus
+haut, toutes les mises sont divisées par deux** (conseil Placé, plan du jour, alertes Telegram),
+jusqu'à ce qu'il remonte au-dessus de ce seuil.
+
+Comparaison sur les 479 conseils Placé passés (cote Gagnant < 8, capital de départ 100) :
+
+| Stratégie | Capital final | Pire baisse réelle | Risque de baisse > 20 % |
+|---|---|---|---|
+| 1 % fixe | 184 | 15 % | 9 % |
+| **1 % + réduction après −15 %** | **184** | 15 % | **3 %** |
+| 2 % + réduction | 290 | 22 % | 65 % |
+| Kelly (0,5 à 3 %) | 471 | 35 % | 83 % |
+
+La protection garde le gain et coupe les grosses chutes. Miser plus gros (ou selon Kelly) multiplie
+le gain **et** les chutes, et suppose des probabilités exactes alors que ce ne sont que des
+estimations. Ne cherchez jamais à « vous refaire » en augmentant les mises après des pertes.
+
 ### 📅 Plan du jour
 
 L'onglet **📅 Plan du jour** passe au crible **toutes les courses françaises à venir** (environ
@@ -313,4 +333,5 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 - `place.py` : conseil Simple Placé (formule de Harville), suivi à blanc
 - `suivi_auto.py` : relevé automatique des conseils Placé et alertes Telegram (GitHub Actions)
 - `plan.py` : plan du jour (crible, sélection, répartition du budget, joker)
+- `protection.py` : capital actuel et réduction des mises après une baisse
 - `tests/` : tests automatiques

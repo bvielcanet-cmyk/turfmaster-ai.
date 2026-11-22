@@ -661,3 +661,29 @@ def test_plan_du_jour(tmp_path):
         bouton(at, "Approfondir avec l'IA").click().run()
     assert post.call_count == 1
     assert any("🔬 R1C2 n° 6" in c and "IA" in c for c in textes(at.caption)), textes(at.caption)
+
+
+
+# --- Protection des mises -----------------------------------------------------------------
+
+def test_protection_divise_les_mises_apres_une_baisse():
+    # Tickets joués : +200 puis -190 -> capital 1010, 16 % sous le plus haut (1200) : mises divisées par 2
+    feuille = FauxSheets(TurfMaster=pd.DataFrame([
+        {**historique((maintenant(3), 10, "Gagné", 210)).iloc[0].to_dict()},
+        {**historique((maintenant(2), 190, "Perdu", 0)).iloc[0].to_dict()},
+    ]))
+    at, _ = lancer([], texte="", sheets=feuille, recherche=False)
+    assert any("Protection active" in w for w in textes(at.warning)), textes(at.warning)
+    with mock.patch("requests.get", side_effect=faux_get), mock.patch("streamlit.connection", return_value=feuille):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert "5,05" in conseil_html(at)  # 1 % de 1010 € = 10,10 €, divisé par 2
+
+
+def test_sans_baisse_mises_normales():
+    at, _ = lancer([], texte="", recherche=False)
+    assert any("Capital actuel" in c for c in textes(at.caption))
+    with mock.patch("requests.get", side_effect=faux_get):
+        at.radio[0].set_value("📅 Programme PMU").run()
+        bouton(at, "CONSEIL PLACÉ").click().run()
+    assert "10,00" in conseil_html(at)
