@@ -69,6 +69,19 @@ pari gagnant, donc du hasard. Multi et Tiercé ne figurent pas dans ce tableau (
 
 **Un feu vert ne veut pas dire « rentable »** : il mesure le suspense, pas la rentabilité.
 
+### Les 3 courses du jour et leurs 3 paris
+
+Parmi les courses à venir, hors 🔴, les 3 où le favori a le plus de chances d'être placé. Chaque carte
+donne le pari (favori en Simple Placé), la mise plafond, l'arrivée estimée et les chances d'être placé.
+
+Ce sont les paris **les plus sûrs, pas des paris rentables** : sur 180 paris en 60 jours, 76,1 % placés
+(79,2 % en sept.-oct., 70,0 % en novembre) et −3,0 % des mises (−8,9 % en novembre). Les trois passent
+ensemble 38 % des jours. La sélection change quand les cotes bougent ou qu'une course part.
+
+**Plafonds d'affichage** : 75 % pour un cheval placé, 50 % pour un gagnant. Au-delà, le calcul promettait
+plus que la réalité. Même plafonné, le Placé des grands favoris était optimiste en novembre (69 %).
+Ces plafonds ont été fixés après avoir vu les 60 jours : ils n'ont pas de confirmation indépendante.
+
 ### Conseil et mise conseillée
 
 | Feu | Conseil | Mise maximale | Perte moyenne mesurée |

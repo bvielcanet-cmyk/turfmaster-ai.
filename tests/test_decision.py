@@ -88,6 +88,40 @@ def test_conseil():
     assert decision.conseiller(ouverte, 100, 0)["mise"] == 0
 
 
+def test_selection_trois_courses_jamais_une_rouge():
+    lignes = [{"feu": f, "offerts": o, "id": i} for i, (f, o) in enumerate(
+        [("vert", []), ("rouge", []), ("vert", ["SIMPLE_GAGNANT"]), ("orange", []), ("vert", []), ("vert", [])])]
+    assert [x["id"] for x in decision.selectionner(lignes)] == [0, 3, 4]
+    assert decision.selectionner(lignes[1:3]) == []
+    # la mise va bien aux trois courses affichées
+    reparties = decision.repartir(lignes, 100, 0)
+    assert [x["id"] for x in reparties if x["mise"]] == [x["id"] for x in decision.selectionner(reparties)]
+
+
+def test_plafond_des_grands_favoris():
+    o = decision.ordre_estime(course(1.1, 2.2, 25, 30, 40, 50, 60, 80))
+    vu = decision.chances_affichees(o)
+    assert vu["victoire"].max() <= decision.PLAFOND_GAGNE and vu["place"].max() <= decision.PLAFOND_PLACE
+    assert vu.iloc[0]["place"] == vu["place"].max()
+    offerts = ["SIMPLE_PLACE", "SIMPLE_GAGNANT", "COUPLE_PLACE"]
+    assert all(x["chance"] <= decision.PLAFOND_PLACE for x in decision.pronostics(o, offerts))
+
+
+def test_classement_sans_ex_aequo_du_plafond():
+    base = {"pays": "FRA", "statut": "à venir", "reunion": 1, "heure": "14:00", "hippodrome": "H"}
+    programme = [{**base, "id": f"R1C{n}", "course": n} for n in (1, 2)]
+    lire = lambda jour, r, n: course(1.3 if n == 1 else 1.1, 9, 12, 20, 30, 40, 50, 60)
+    with mock.patch("pmu.depart_passe", return_value=False):
+        lignes = decision.cribler(date(2026, 11, 22), None, programme, lire)
+    assert lignes[0]["place"] == lignes[1]["place"] == decision.PLAFOND_PLACE and lignes[0]["course"] == "R1C2"
+    assert len(lignes[0]["arrivee"]) == 5
+
+
+def test_les_chances_affichees_font_100():
+    vu = decision.chances_affichees(decision.ordre_estime(course(1.1, 9, 10, 11)))
+    assert vu["victoire"].sum() == pytest.approx(1) and vu["place"].sum() == pytest.approx(2)
+
+
 def test_cribler():
     base = {"pays": "FRA", "statut": "à venir", "reunion": 1, "heure": "14:00", "hippodrome": "H"}
     programme = [{**base, "id": "R1C1", "course": 1}, {**base, "id": "R1C2", "course": 2},

@@ -52,6 +52,12 @@ Quarté+, Quinté+ et Pick 5 n'ont pas été testés. Multi et Tiercé : seules 
 
 GAGNANT, PLACE = "Simple Gagnant", "Simple Placé"
 SEUIL_PRONOSTIC = 0.30
+# Au-delà, le calcul promet plus que la réalité : favori annoncé à 75 % ou plus placé 76 % du temps
+# (69 % en novembre), annoncé à 50 % ou plus gagnant 51 % du temps. On n'affiche donc jamais davantage.
+PLAFOND_GAGNE, PLAFOND_PLACE = 0.50, 0.75
+NB_SELECTION = 3
+# Les 3 favoris placés les plus sûrs de chaque jour, hors courses rouges (60 jours, 180 paris)
+REPERE_SELECTION = {"place": 0.761, "place_novembre": 0.700, "perte": 0.030, "trois_passent": 0.383}
 MISE_MINI, MISE_MAXI, PARIS_PAR_JOUR = 2.0, 10.0, 3  # 2 € = mise de base du Simple en point de vente
 PART_BUDGET = {"vert": 0.10, "orange": 0.05, "rouge": 0.0}  # par pari, du budget de 7 jours
 PERTE_PLACE = {"vert": 0.061, "orange": 0.062, "rouge": 0.216}  # favori placé, perte moyenne mesurée
@@ -130,8 +136,20 @@ def corriger(p, coefficients):
 def chances_favori(ordre):
     """(gagner, être placé) du favori, corrigées : le calcul brut surestimait les grands favoris."""
     f = ordre.iloc[0]
-    return (corriger(f["victoire"], PRONOSTICS["SIMPLE_GAGNANT"][0][3]),
-            corriger(f["place"], PRONOSTICS["SIMPLE_PLACE"][0][3]))
+    return (min(corriger(f["victoire"], PRONOSTICS["SIMPLE_GAGNANT"][0][3]), PLAFOND_GAGNE),
+            min(corriger(f["place"], PRONOSTICS["SIMPLE_PLACE"][0][3]), PLAFOND_PLACE))
+
+
+def chances_affichees(ordre):
+    """L'arrivée estimée telle qu'affichée : favori corrigé, ce qui lui est retiré revient aux autres.
+    Les totaux restent 100 % de gagnant et 2 ou 3 placés, sauf si un cheval atteint les chances du favori."""
+    vu = ordre.copy()
+    totaux = (1.0, float(nombre_places(len(ordre))))
+    for colonne, total, favori in zip(("victoire", "place"), totaux, chances_favori(ordre)):
+        autres = vu[colonne].iloc[1:]
+        partage = (autres * (total - favori) / autres.sum()).clip(upper=favori)
+        vu[colonne] = [favori, *partage]
+    return vu
 
 
 def chance_selection(p, k, rangs):
@@ -168,6 +186,10 @@ def pronostics(ordre, offerts=None):
             else:
                 p = chance_selection(ordre["victoire"], k, rangs)
             p = corriger(p, coefficients)
+            if code in ("SIMPLE_PLACE", "COUPLE_PLACE", "TRIO"):
+                p = min(p, chances_favori(ordre)[1])  # aucun ne peut passer plus souvent que le favori placé
+            elif code == "SIMPLE_GAGNANT":
+                p = chances_favori(ordre)[0]
             if p > SEUIL_PRONOSTIC:
                 resultat.append({"code": code, "pari": nom, "chevaux": " - ".join(ordre["num"].head(k)),
                                  "chance": p, "bilan": bilan})
@@ -214,6 +236,13 @@ def repartir(lignes, budget, deja_mise, paris_du_jour=0):
     return resultat
 
 
+def selectionner(lignes):
+    """Les 3 courses du jour où le favori a le plus de chances d'être placé (jamais une course rouge).
+    Ce sont les paris les plus sûrs, pas les plus rentables."""
+    possibles = [x for x in lignes if x["feu"] != "rouge" and (not x["offerts"] or "SIMPLE_PLACE" in x["offerts"])]
+    return possibles[:NB_SELECTION]
+
+
 def chances_trio(ordre):
     """(dans le désordre, dans l'ordre exact) pour les 3 premiers estimés ; None sous 8 partants."""
     if len(ordre) < 8:
@@ -246,8 +275,10 @@ def cribler(jour, maintenant, programme, lire_partants):
         couleur = feu(ordre)
         if couleur:
             f, (gagne, place) = ordre.iloc[0], chances_favori(ordre)
-            lignes.append({"course": c["id"], "heure": c["heure"], "hippodrome": c["hippodrome"], "feu": couleur,
+            lignes.append({"course": c["id"], "brut": float(f["place"]), "trio": chances_trio(ordre),
+                           "arrivee": chances_affichees(ordre).head(5).to_dict("records"),
+                           "places_payees": nombre_places(len(ordre)), "libelle": c.get("libelle", ""), "heure": c["heure"], "hippodrome": c["hippodrome"], "feu": couleur,
                            "favori": f"n° {f['num']} {f['nom']}", "victoire": gagne, "place": place,
                            "partants": len(ordre), "offerts": c.get("paris") or [],
                            "pronostics": pronostics(ordre, c.get("paris"))})
-    return sorted(lignes, key=lambda x: x["place"], reverse=True)
+    return sorted(lignes, key=lambda x: x["brut"], reverse=True)  # le plafond créerait des ex aequo

@@ -364,9 +364,12 @@ def test_lecture_ratee_n_efface_rien():
 def test_courses_du_jour_sans_gemini():
     at, _ = demarrer()
     with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p:
-        bouton(at, "CLASSER LES COURSES").click().run()
+        bouton(at, "EXPLORER LES COURSES").click().run()
     assert p.call_count == 0 and not at.exception
     assert any("R1C2" in m and "favori" in m and "Conseil" in m and "Plus de 30" in m for m in textes(at.markdown))
+    ecran = " ".join(textes(at.markdown) + textes(at.warning) + textes(at.caption))
+    assert "Les 3 courses du jour" in ecran and "Toutes les courses" in ecran
+    assert ("Arrivée estimée" in ecran and "pas rentable" in ecran) or "mieux vaut passer" in ecran
 
 
 # --- Programme PMU, arrivées et mesure -----------------------------------------
