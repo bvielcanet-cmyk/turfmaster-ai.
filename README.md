@@ -1,8 +1,8 @@
 # TurfMaster : aide à la décision
 
 Application Streamlit qui aide à **comprendre une course** (qui a des chances, à quel point elle est
-ouverte) et **ce que risque un pari** que vous avez choisi. Elle ne dit pas quoi jouer et ne conseille
-aucune mise.
+ouverte), classe les courses par prédiction, donne un conseil avec une mise plafond et montre
+**ce que coûte un pari**. Le conseil désigne le pari le plus probable, pas un pari rentable.
 
 > **Aucun avantage sur les autres parieurs n'a été démontré.** Ne misez que ce que vous acceptez de
 > perdre. Joueurs Info Service : 09 74 75 13 13 (appel non surtaxé).
@@ -50,15 +50,15 @@ courses claires, et sous-estime le trio des trois préférés : l'application af
 
 Par couleur de feu, **aucun pari ne gagne de façon fiable** sur les deux périodes (sept.-oct. et
 novembre). Seule case positive sur l'ensemble : le Super 4 des courses rouges, 36 courses et un seul
-pari gagnant, donc du hasard. Multi, Tiercé, Quarté+, Quinté+ et Pick 5 ne sont pas testés, ni les
-sélections autres que les chevaux préférés.
+pari gagnant, donc du hasard. Multi et Tiercé ne figurent pas dans ce tableau (voir les pronostics à plus de
+30 %). Quarté+, Quinté+ et Pick 5 ne sont pas testés, ni les sélections autres que les chevaux préférés.
 
 ## Utilisation
 
 - **🏇 La course** : le feu, le podium estimé d'après les cotes, le risque d'un pari que vous
   choisissez et, sur demande, l'avis de l'IA et de la presse. Tout est gratuit sauf cet avis.
-- **🚦 Courses du jour** : toutes les courses françaises à venir, de la plus claire à la plus ouverte,
-  sans requête Gemini.
+- **🚦 Classement** : les courses françaises à venir, classées par chances du favori d'être placé, avec
+  conseil, mise et pronostics à plus de 30 %, sans requête Gemini.
 - **📒 Mon carnet** : les paris réellement joués, leur résultat net et la comparaison IA / cotes.
 
 | Feu | Chances du favori de gagner | Sens |
@@ -67,7 +67,38 @@ sélections autres que les chevaux préférés.
 | 🟠 Course disputée | de 22 à 35 % | un favori, de vrais rivaux |
 | 🔴 Course très ouverte | moins de 22 % | surprise possible |
 
-**Un feu vert ne veut pas dire « jouer »** : il mesure le suspense, pas la rentabilité.
+**Un feu vert ne veut pas dire « rentable »** : il mesure le suspense, pas la rentabilité.
+
+### Conseil et mise conseillée
+
+| Feu | Conseil | Mise maximale | Perte moyenne mesurée |
+|---|---|---|--:|
+| 🟢 | favori en Simple Placé | 10 % du budget des 7 jours | 6,1 % de la mise |
+| 🟠 | favori en Simple Placé | 5 % du budget des 7 jours | 6,2 % de la mise |
+| 🔴 | passer | 0 € | (21,6 % si l'on jouait) |
+
+Mise entre 2 € et 10 €, 3 paris par jour au plus, jamais au-delà du budget restant. Ce n'est pas une
+stratégie gagnante : ne pas jouer reste le choix le moins cher.
+
+### Pronostics à plus de 30 %
+
+Chance que les chevaux préférés des parieurs fassent passer chaque pari. Une correction a été apprise
+sur sept.-oct. et gardée seulement si elle prévoyait mieux novembre. Cas passés au-dessus de 30 % :
+
+| Pari | Cas | Annoncé | Réel | Résultat | Intervalle à 90 % |
+|---|--:|--:|--:|--:|--:|
+| Simple Placé | 1 766 | 55,9 % | 56,2 % | −10,9 % | −14 à −8 % |
+| Simple Gagnant | 641 | 39,5 % | 39,2 % | −12,7 % | −20 à −5 % |
+| Couplé Placé | 423 | 39,7 % | 40,4 % | −1,7 % | −12 à +9 % |
+| 2 sur 4 | 694 | 41,7 % | 37,8 % | −19,8 % | −27 à −13 % |
+| Mini Multi en 6 | 117 | 36,9 % | 36,8 % | −20,4 % | −40 à +1 % |
+| Couplé Gagnant | 46 | 36,9 % | 32,6 % | −16,1 % | −48 à +18 % |
+| Multi en 7 | 33 | 35,1 % | 57,6 % | +18,8 % | −23 à +67 % |
+
+La colonne « annoncé / réel » mélange la période d'apprentissage et novembre. Aucun pari n'est rentable
+de façon fiable ; le Multi en 7 a trop peu de cas pour conclure. Trio, Mini Multi en 5 et Multi en 6
+dépassent rarement 30 % (10 cas ou moins). Couplé Ordre, Trio Ordre, Super 4, Tiercé, Multi en 4 ou 5 et
+Mini Multi en 4 ne les ont jamais dépassés. Quarté+, Quinté+ et Pick 5 ne sont pas calculés.
 
 Le **budget sur 7 jours** (barre latérale, à régler à chaque visite) compte tout ce qui a été misé :
 un gain ne l'agrandit pas. C'est un avertissement, pas un blocage.
@@ -108,7 +139,7 @@ Pour le copier-coller :
 ### Avis de l'IA
 
 Le bouton **🤖** demande un avis à Gemini, affiché à côté de celui des cotes. C'est une information :
-il n'en est tiré ni pari ni mise. Les numéros inventés sont écartés et signalés.
+il ne change ni le conseil ni la mise. Les numéros inventés sont écartés et signalés.
 
 ### Pronostics de la presse
 
@@ -220,7 +251,7 @@ Ils sont lancés automatiquement par GitHub Actions à chaque envoi.
 ## Organisation du code
 
 - `app.py` : interface Streamlit
-- `decision.py` : feux, podium estimé, risque d'un pari choisi
+- `decision.py` : feux, pronostics, conseil et mise, podium, risque
 - `carnet.py` : paris joués, règlement officiel, budget
 - `turf_logic.py` : lecture des partants, appels Gemini, presse
 - `pmu.py` : programme, partants, cotes, arrivées et rapports du PMU

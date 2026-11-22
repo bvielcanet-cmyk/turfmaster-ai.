@@ -40,6 +40,54 @@ def test_risque_jamais_presente_comme_un_avantage():
     assert decision.risque_pari(.5, 3.0, 10)["cout_moyen"] is None
 
 
+@pytest.mark.parametrize("couleur, budget, deja, nombre, mise", [
+    ("vert", 20, 0, 0, 2), ("vert", 60, 0, 0, 6), ("orange", 100, 0, 0, 5), ("vert", 5000, 0, 0, 10),
+    ("rouge", 100, 0, 0, 0), ("vert", 20, 19, 0, 0), ("vert", 60, 56.7, 0, 3), ("vert", 60, 0, 3, 0),
+])
+def test_mise_conseillee(couleur, budget, deja, nombre, mise):
+    assert decision.mise_conseillee(couleur, budget, deja, nombre) == mise
+
+
+@pytest.mark.parametrize("budget", range(0, 130, 7))
+def test_repartition_dans_le_budget(budget):
+    lignes = [{"feu": f, "offerts": []} for f in ("vert", "rouge", "orange", "vert", "vert", "orange")]
+    mises = [x["mise"] for x in decision.repartir(lignes, budget, 4)]
+    assert sum(mises) <= max(budget - 4, 0) and sum(m > 0 for m in mises) <= 3 and mises[1] == 0
+
+
+def test_chance_selection_egale_au_podium():
+    p = decision.ordre_estime(course(2, 3, 5, 8, 10, 12, 15, 20, 30, 40))["victoire"]
+    issues = decision.podiums(p, 3)
+    assert decision.chance_selection(p, 2, 3) == pytest.approx(sum(v for i, v in issues.items() if {0, 1} <= set(i)))
+    assert decision.chance_selection(p, 3, 3) == pytest.approx(sum(v for i, v in issues.items() if set(i) == {0, 1, 2}))
+    assert decision.chance_selection(p, 10, 4) == pytest.approx(1)
+    assert decision.chance_selection(p.iloc[:4], 2, 4) == pytest.approx(1)
+
+
+def test_pronostics_au_dessus_de_30_et_seulement_les_paris_offerts():
+    o = decision.ordre_estime(course(1.4, 4, 9, 14, 20, 25, 30, 40, 50, 60))
+    offerts = ["SIMPLE_PLACE", "COUPLE_PLACE", "MINI_MULTI"]
+    liste = decision.pronostics(o, offerts)
+    assert liste and all(x["chance"] > .30 and x["code"] in offerts for x in liste)
+    assert [x["chance"] for x in liste] == sorted((x["chance"] for x in liste), reverse=True)
+    assert {x["code"] for x in decision.pronostics(o)} <= {"SIMPLE_PLACE", "SIMPLE_GAGNANT"}
+
+
+def test_favori_corrige_vers_le_bas():
+    o = decision.ordre_estime(course(1.4, 8, 9, 12, 20, 25, 30, 40))
+    gagne, place = decision.chances_favori(o)
+    assert gagne < o.iloc[0]["victoire"] and place < o.iloc[0]["place"]
+
+
+def test_conseil():
+    claire = decision.ordre_estime(course(1.4, 8, 9, 12, 20))
+    c = decision.conseiller(claire, 20, 0)
+    assert c["num"] == "1" and c["mise"] == 2 and c["cout"] > 0
+    assert decision.conseiller(claire, 20, 0, offerts=["SIMPLE_GAGNANT"])["mise"] == 0
+    ouverte = decision.ordre_estime(course(5, 5, 5, 5, 5))
+    assert decision.conseiller(ouverte, 100, 0)["mise"] == 0
+
+
 def test_cribler():
     base = {"pays": "FRA", "statut": "à venir", "reunion": 1, "heure": "14:00", "hippodrome": "H"}
     programme = [{**base, "id": "R1C1", "course": 1}, {**base, "id": "R1C2", "course": 2},

@@ -47,6 +47,13 @@ def bilan(df):
             "gagnes": int((t["resultat"] == GAGNE).sum()), "mise": mise, "rendu": rendu, "net": rendu - mise}
 
 
+def nombre_du_jour(df, jour):
+    """Paris notés ce jour-là (remboursés exclus)."""
+    if df.empty:
+        return 0
+    return int((df["date"].astype(str).str.startswith(jour.isoformat()) & (df["resultat"] != REMBOURSE)).sum())
+
+
 def mise_semaine(df, maintenant, jours=7):
     """Total misé sur 7 jours, gagné ou perdu : un gain n'agrandit pas le budget."""
     if df.empty:

@@ -34,6 +34,9 @@ st.markdown("""
     .tm-titre { font-size: 1.7rem; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
     .tm-oui .tm-titre { color: #1e9e4a; }
     .tm-non .tm-titre { color: #d9822b; }
+    .tm-conseil { border: 2px solid #3b82f6; background: rgba(59, 130, 246, .10); }
+    .tm-conseil .tm-titre { color: #3b82f6; }
+    .tm-detail { margin-top: 6px; line-height: 1.6; }
     .tm-neutre { border-color: rgba(127, 127, 127, .5); background: rgba(127, 127, 127, .08); }
     .tm-neutre .tm-titre { font-size: 1.15rem; opacity: .8; }
     .tm-pari { font-size: 1.2rem; font-weight: 700; margin-top: 6px; }
@@ -436,22 +439,25 @@ def feu_html(ordre):
         return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">⚪ PAS ENCORE DE FEU</div>'
                 '<div class="tm-pourquoi">Il faut au moins 4 partants et la cote de chacun.</div></div>')
     f, favori, repere = decision.FEUX[couleur], ordre.iloc[0], decision.REPERES[couleur]
+    gagne, place = decision.chances_favori(ordre)
     classe = {"vert": "tm-oui", "orange": "tm-non", "rouge": "tm-rouge"}[couleur]
     return f"""<div class="tm-verdict {classe}">
 <div class="tm-titre">{f['emoji']} {f['titre']}</div>
 <div class="tm-pari">{f['phrase']}</div>
 <div class="tm-chiffres">
 <div><span>⭐ Favori des parieurs</span><b>n° {escape(favori['num'])}</b><small>{escape(favori['nom'])}</small></div>
-<div><span>🏆 Ses chances de gagner</span><b>{pct(favori['victoire'])}</b><small>d'après les cotes</small></div>
-<div><span>🏅 D'être placé</span><b>{pct(favori['place'])}</b><small>dans les {decision.nombre_places(len(ordre))} premiers</small></div>
+<div><span>🏆 Ses chances de gagner</span><b>{pct(gagne)}</b><small>estimation corrigée</small></div>
+<div><span>🏅 D'être placé</span><b>{pct(place)}</b><small>dans les {decision.nombre_places(len(ordre))} premiers</small></div>
 </div>
 <div class="tm-pourquoi">Sur {repere['courses']} courses passées de cette couleur, le favori a gagné
 <b>{pct(repere['gagne'])}</b> du temps et a été placé <b>{pct(repere['place'])}</b> du temps.
-{"Dans ces courses, les cotes surestiment le favori : fiez-vous plutôt à ce constat. " if couleur == "vert" else ""}Le feu dit si la course est lisible, pas si un pari est rentable.</div>
+{"Les grands favoris restent souvent un peu surestimés. " if couleur == "vert" else ""}Le feu dit si la course est lisible, pas si un pari est rentable.</div>
 </div>"""
 
 
 def podium_html(ordre, nombre=6):
+    ordre = ordre.copy()
+    ordre.loc[ordre.index[0], ["victoire", "place"]] = decision.chances_favori(ordre)  # comme dans le feu
     maxi, medailles = float(ordre["victoire"].max()), {1: "🥇", 2: "🥈", 3: "🥉"}
     lignes = []
     for _, o in ordre.head(nombre).iterrows():
@@ -464,15 +470,51 @@ def podium_html(ordre, nombre=6):
     return "".join(lignes)
 
 
+def conseil_html(c):
+    if not c["mise"]:
+        return ('<div class="tm-verdict tm-neutre"><div class="tm-titre">✋ CONSEIL : PASSER</div>'
+                f'<div class="tm-pourquoi">{escape(c["raison"])}</div></div>')
+    return f"""<div class="tm-verdict tm-conseil">
+<div class="tm-titre">💡 CONSEIL : n° {escape(c['num'])} PLACÉ</div>
+<div class="tm-pari">{escape(c['nom'])}</div>
+<div class="tm-chiffres">
+<div><span>🎯 Chances d'être placé</span><b>{pct(c['chance'])}</b><small>estimation corrigée</small></div>
+<div><span>💶 Mise conseillée</span><b>{euros(c['mise'])}</b><small>au maximum, si vous jouez</small></div>
+<div><span>🧾 Ce pari coûte</span><b>≈ {euros(c['cout'])}</b><small>en moyenne, d'après le test</small></div>
+</div>
+<div class="tm-pourquoi">C'est le pari le plus probable, pas un pari gagnant à la longue.
+Ne pas jouer reste le choix le moins cher.</div>
+</div>"""
+
+
+def pronostics_html(liste):
+    return "".join(
+        f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-nom">{escape(x["pari"])}</span>'
+        f'<span class="tm-pct">{pct(x["chance"])}</span></div>'
+        f'<div class="tm-sous"><b>n° {escape(x["chevaux"])}</b> · sur le passé : {escape(x["bilan"])}</div></div>'
+        for x in liste)
+
+
 def jour_html(lignes):
     html = []
-    for x in lignes:
+    for rang, x in enumerate(lignes, 1):
+        if x["mise"]:
+            conseil = (f'💡 Conseil : {escape(x["favori"])} placé · <b>mise conseillée {euros(x["mise"])}</b> '
+                       f'(coût moyen ≈ {euros(x["cout"])})')
+        elif x["feu"] == "rouge":
+            conseil = "✋ Conseil : passer, course trop ouverte"
+        else:
+            conseil = "✋ Pas de mise conseillée : 3 paris par jour au plus, dans le budget"
+        paris = " · ".join(f'{escape(p["pari"])} {escape(p["chevaux"])} : <b>{pct(p["chance"])}</b>'
+                           for p in x["pronostics"]) or "aucun pari au-dessus de 30 %"
         html.append(
-            f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-rang">{decision.FEUX[x["feu"]]["emoji"]}</span>'
+            f'<div class="tm-ligne"><div class="tm-tete"><span class="tm-rang">{rang} {decision.FEUX[x["feu"]]["emoji"]}</span>'
             f'<span class="tm-num">{escape(x["heure"])}</span><span class="tm-nom">{escape(x["course"])} '
-            f'{escape(x["hippodrome"])}</span><span class="tm-pct">{pct(x["victoire"])}</span></div>'
+            f'{escape(x["hippodrome"])}</span><span class="tm-pct">{pct(x["place"])}</span></div>'
             f'<div class="tm-sous">favori {escape(x["favori"])} · gagner {pct(x["victoire"])} · être placé '
-            f'{pct(x["place"])} · {x["partants"]} partants</div></div>')
+            f'{pct(x["place"])} · {x["partants"]} partants</div>'
+            f'<div class="tm-sous tm-detail">{conseil}</div>'
+            f'<div class="tm-sous tm-detail">📊 Plus de 30 % : {paris}</div></div>')
     return "".join(html)
 
 
@@ -489,8 +531,8 @@ def risque_html(r):
 # --- 3. INTERFACE ---
 st.title("🚦 TurfMaster")
 st.markdown("**Aide à la décision** · le feu éclaire, vous décidez")
-st.info("🎲 **Aucun avantage sur les autres parieurs n'a été démontré.** TurfMaster aide à comprendre une course "
-        "et ce qu'un pari risque. Il ne dit pas quoi jouer. Ne misez que ce que vous acceptez de perdre.")
+st.info("🎲 **Aucun avantage sur les autres parieurs n'a été démontré.** Les conseils désignent le pari le plus "
+        "probable, pas un pari rentable : testés, ils perdent en moyenne. Ne misez que ce que vous acceptez de perdre.")
 
 with st.sidebar:
     budget_semaine = st.number_input("💶 Mon budget maximum sur 7 jours (€)", value=20, min_value=0,
@@ -508,6 +550,7 @@ stockage = Stockage(conn)
 analyses_enregistrees, _ = stockage.lire(FEUILLE_ANALYSES, mesure.COLONNES_ANALYSES)
 paris_notes, paris_existe = stockage.lire(FEUILLE, carnet.COLONNES)
 deja_mise = carnet.mise_semaine(paris_notes, pd.Timestamp(heure_paris()))
+paris_du_jour = carnet.nombre_du_jour(paris_notes, pmu.aujourd_hui())
 with st.sidebar:
     if deja_mise >= budget_semaine and deja_mise > 0:
         st.error(f"🛑 Budget atteint : {euros(deja_mise)} misés sur 7 jours. On s'arrête là.")
@@ -515,7 +558,7 @@ with st.sidebar:
         st.caption(f"Déjà misé sur 7 jours : **{euros(deja_mise)}** sur {euros(budget_semaine)}.")
 
 # La clé garde l'onglet ouvert quand la page se recharge (après un clic sur un bouton)
-onglet_course, onglet_jour, onglet_carnet = st.tabs(["🏇 La course", "🚦 Courses du jour", "📒 Mon carnet"],
+onglet_jour, onglet_course, onglet_carnet = st.tabs(["🚦 Classement", "🏇 La course", "📒 Mon carnet"],
                                                     key="onglet")
 
 with onglet_course:
@@ -553,6 +596,19 @@ with onglet_course:
         st.markdown(feu_html(ordre), unsafe_allow_html=True)
 
     if not ordre.empty:
+        offerts = course_pmu.get("paris") if course_pmu else None
+        if not terminee:
+            conseil = decision.conseiller(ordre, budget_semaine, deja_mise,
+                                          paris_du_jour if jour == pmu.aujourd_hui() else 0, offerts)
+            st.markdown(conseil_html(conseil), unsafe_allow_html=True)
+        st.markdown("#### 📊 Pronostics à plus de 30 %")
+        liste = decision.pronostics(ordre, offerts)
+        if liste:
+            st.markdown(pronostics_html(liste), unsafe_allow_html=True)
+        else:
+            st.caption("Aucun pari ne dépasse 30 % de chances sur cette course.")
+        if not offerts:
+            st.caption("Liste des paris de la course inconnue : seuls les paris Simples sont calculés.")
         st.markdown("#### 🏁 Podium estimé d'après les cotes")
         st.markdown(podium_html(ordre), unsafe_allow_html=True)
         trio = decision.chances_trio(ordre)
@@ -572,8 +628,12 @@ with onglet_course:
                 choisi, cote = ordre[ordre["num"] == num].iloc[0], None
                 if type_pari == decision.GAGNANT:
                     chance, cote = choisi["victoire"], float(choisi["cote"])
+                    if num == ordre.iloc[0]["num"]:
+                        chance = decision.chances_favori(ordre)[0]
                 else:
                     chance = choisi["place"]
+                    if num == ordre.iloc[0]["num"]:
+                        chance = decision.chances_favori(ordre)[1]
                     if course_pmu:
                         try:
                             fourchette = cotes_place_pmu(jour, course_pmu["reunion"], course_pmu["course"]).get(num)
@@ -708,23 +768,27 @@ with onglet_course:
 
 with onglet_jour:
     st.caption("🟢 course claire · 🟠 disputée · 🔴 très ouverte. Le feu mesure le suspense, pas la rentabilité.")
-    if st.button("🚦 ALLUMER LES FEUX DE LA JOURNÉE (gratuit)", width="stretch"):
+    if st.button("🚦 CLASSER LES COURSES DU JOUR (gratuit)", width="stretch"):
         try:
             with st.spinner("🐎 Lecture de toutes les courses (environ 30 secondes)..."):
                 st.session_state["feux"] = {
-                    "heure": heure_paris().strftime("%H:%M"),
+                    "jour": pmu.aujourd_hui(), "heure": heure_paris().strftime("%H:%M"),
                     "lignes": decision.cribler(pmu.aujourd_hui(), datetime.now(tz=pmu.PARIS),
                                                programme_pmu(pmu.aujourd_hui()), partants_pmu)}
         except pmu.PmuErreur as e:
             st.error(f"❌ {e}")
     feux = st.session_state.get("feux")
     if feux:
-        if feux["lignes"]:
-            compte = " · ".join(f"{f['emoji']} {sum(x['feu'] == c for x in feux['lignes'])}"
+        # une liste gardée à l'écran ne doit pas conseiller une course déjà partie
+        restantes = [x for x in feux["lignes"] if not pmu.depart_passe(x, feux["jour"])]
+        if restantes:
+            compte = " · ".join(f"{f['emoji']} {sum(x['feu'] == c for x in restantes)}"
                                 for c, f in decision.FEUX.items())
             st.markdown(f"#### {compte}")
-            st.caption(f"Cotes de {feux['heure']}, de la course la plus claire à la plus ouverte. Elles bougeront.")
-            st.markdown(jour_html(feux["lignes"]), unsafe_allow_html=True)
+            st.caption(f"Cotes de {feux['heure']}, classées par chances du favori d'être placé. Elles bougeront : "
+                       "actualisez avant de décider.")
+            st.markdown(jour_html(decision.repartir(restantes, budget_semaine, deja_mise, paris_du_jour)),
+                        unsafe_allow_html=True)
         else:
             st.caption("Plus aucune course française à venir aujourd'hui.")
 

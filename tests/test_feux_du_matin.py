@@ -7,7 +7,7 @@ import feux_du_matin
 
 
 LIGNE = {"feu": "vert", "heure": "14:00", "course": "R1C1", "hippodrome": "A & B", "favori": "n° 1 <X>",
-         "victoire": .4}
+         "victoire": .4, "place": .7}
 
 
 def test_message_sans_pari_ni_mise():

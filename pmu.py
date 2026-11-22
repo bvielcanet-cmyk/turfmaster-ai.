@@ -76,6 +76,8 @@ def lire_programme(data):
                 "partants": c.get("nombreDeclaresPartants"),
                 "statut": STATUTS.get(c.get("statut"), "à venir"),
                 "arrivee": [str(n) for n in arrivee],
+                # « E_ » : même pari, joué en ligne
+                "paris": sorted({str(p.get("typePari", "")).removeprefix("E_") for p in c.get("paris") or []}),
             })
     return courses
 

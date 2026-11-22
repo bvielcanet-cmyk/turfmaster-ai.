@@ -46,6 +46,13 @@ def test_rapports_en_euros():
     assert pmu.lire_rapports_gagnant([]) == {}
 
 
+def test_paris_proposes():
+    course = {"numReunion": 1, "numOrdre": 1, "paris": [{"typePari": "E_MULTI"}, {"typePari": "MULTI"},
+                                                      {"typePari": "SIMPLE_PLACE"}]}
+    lu = pmu.lire_programme({"programme": {"reunions": [{"courses": [course]}]}})
+    assert lu[0]["paris"] == ["MULTI", "SIMPLE_PLACE"]
+
+
 def test_arrivee():
     with mock.patch("requests.get", side_effect=faux_get):
         a = pmu.arrivee("21112026", 1, 1)

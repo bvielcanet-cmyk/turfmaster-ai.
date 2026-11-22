@@ -186,11 +186,12 @@ def test_feu_et_podium_sans_aucune_requete_gemini():
     assert any("Aucun avantage" in i for i in textes(at.info))
 
 
-def test_jamais_de_conseil_de_jouer():
+def test_conseil_honnete_et_rien_de_preselectionne():
     at, _ = lancer([http()], presse=PRESSE)
     ecran = " ".join(textes(at.markdown) + textes(at.caption) + textes(at.info) + textes(at.success)
                      + [b.label for b in at.button] + [m.label for m in at.metric])
-    for interdit in ("À JOUER", "JEU POSSIBLE", "Mise conseillée", "PLACÉ CONSEILLÉ", "ONE SHOT", "Kelly"):
+    assert "Mise conseillée" in ecran and "pas un pari gagnant" in ecran
+    for interdit in ("À JOUER", "JEU POSSIBLE", "ONE SHOT", "Kelly", "+22"):
         assert interdit not in ecran
     # rien n'est présélectionné : ni pari, ni cheval, ni mise
     assert champ(at.selectbox, "Pari").value is None and champ(at.selectbox, "Mon cheval").value is None
@@ -306,6 +307,19 @@ def test_risque_du_pari_choisi(pari, gain):
     assert not gain or gain in ecran
 
 
+def test_aucun_conseil_sur_une_course_partie():
+    at, _ = demarrer(course=0)
+    assert "CONSEIL" not in " ".join(m for m in textes(at.markdown) if "tm-verdict" in m)
+
+
+def test_budget_epuise_conseille_de_passer():
+    recent = (pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    joues = pd.DataFrame([{"date": recent, "pari": "Simple Placé", "mise": 20, "resultat": "Perdu"}])
+    at, _ = demarrer(FauxSheets(TurfMaster=joues), course=1)
+    ecran = " ".join(textes(at.markdown))
+    assert "CONSEIL : PASSER" in ecran and "Mise conseillée" not in ecran
+
+
 def test_budget_depasse():
     at, _ = demarrer(course=1)
     choisir(at, mise=25.0)
@@ -350,9 +364,9 @@ def test_lecture_ratee_n_efface_rien():
 def test_courses_du_jour_sans_gemini():
     at, _ = demarrer()
     with mock.patch("requests.get", side_effect=faux_get), mock.patch("requests.post") as p:
-        bouton(at, "ALLUMER LES FEUX").click().run()
+        bouton(at, "CLASSER LES COURSES").click().run()
     assert p.call_count == 0 and not at.exception
-    assert any("R1C2" in m and "favori" in m for m in textes(at.markdown))
+    assert any("R1C2" in m and "favori" in m and "Conseil" in m and "Plus de 30" in m for m in textes(at.markdown))
 
 
 # --- Programme PMU, arrivées et mesure -----------------------------------------

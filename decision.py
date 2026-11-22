@@ -1,7 +1,7 @@
-"""Aide à la décision : lisibilité d'une course, podium estimé et risque d'un pari choisi par l'utilisateur.
+"""Aide à la décision : lisibilité d'une course, pronostics chiffrés, conseil et risque d'un pari.
 
-Ce module ne choisit aucun pari et ne conseille aucune mise. Les cotes résument l'avis de tous les
-parieurs : elles disent qui a des chances, pas quel pari est rentable.
+Le conseil désigne le pari le PLUS PROBABLE, jamais un pari rentable : aucun ne l'est de façon fiable.
+La mise conseillée est un plafond tiré du budget. Les cotes résument l'avis de tous les parieurs.
 
 Règle pour toute étude future : une cote utilisée pour CHOISIR un pari doit être horodatée avant le
 départ. Les cotes que le PMU renvoie pour une course terminée (dernierRapportDirect, cotes probables)
@@ -48,9 +48,32 @@ environ 30 minutes avant le départ, payé aux rapports officiels du PMU (22/09 
 | 🎰 Super 4 | 2 % | 5,56 € | 423 |
 | 🎰 Trio Ordre | 5 % | 6,14 € | 175 |
 
-Multi, Tiercé, Quarté+, Quinté+ et Pick 5 n'ont pas été testés. Un feu vert ne rend aucun pari rentable."""
+Quarté+, Quinté+ et Pick 5 n'ont pas été testés. Multi et Tiercé : seules leurs chances ont été mesurées ici. Un feu vert ne rend aucun pari rentable."""
 
 GAGNANT, PLACE = "Simple Gagnant", "Simple Placé"
+SEUIL_PRONOSTIC = 0.30
+MISE_MINI, MISE_MAXI, PARIS_PAR_JOUR = 2.0, 10.0, 3  # 2 € = mise de base du Simple en point de vente
+PART_BUDGET = {"vert": 0.10, "orange": 0.05, "rouge": 0.0}  # par pari, du budget de 7 jours
+PERTE_PLACE = {"vert": 0.061, "orange": 0.062, "rouge": 0.216}  # favori placé, perte moyenne mesurée
+
+# Pronostic par type de pari, toujours sur les chevaux les moins cotés.
+# k chevaux choisis, rangs visés (None : places payées). « correction » : (a, b) de a + b·logit(p), apprise
+# sur sept.-oct. 2026 et gardée seulement si elle prévoyait mieux novembre. « bilan » : courses passées où
+# la chance annoncée dépassait 30 %. Aucun pari n'y est rentable de façon fiable.
+PRONOSTICS = {
+    "SIMPLE_PLACE": [("🏅 Simple Placé", 1, None, (-0.1017, 0.8902), "perd 11 % en moyenne")],
+    "SIMPLE_GAGNANT": [("🏆 Simple Gagnant", 1, 1, (-0.2409, 0.7567), "perd 13 % en moyenne")],
+    "COUPLE_PLACE": [("👯 Couplé Placé", 2, 3, (0.1141, 1.0204),
+                      "perd 2 % en moyenne, très incertain (de −12 à +9 %)")],
+    "COUPLE_GAGNANT": [("👯 Couplé Gagnant", 2, 2, (0.3134, 1.0918), "46 cas seulement, peu fiable")],
+    "DEUX_SUR_QUATRE": [("🎯 2 sur 4", 2, 4, None, "perd 20 % en moyenne, chances un peu surestimées")],
+    "TRIO": [("🥉 Trio", 3, 3, (0.5221, 1.0771), "10 cas seulement, peu fiable")],
+    "MINI_MULTI": [("🎰 Mini Multi en 6", 6, 4, (0.0810, 1.0471), "perd 20 % en moyenne"),
+                   ("🎰 Mini Multi en 5", 5, 4, (0.3474, 1.2145), "9 cas seulement, peu fiable")],
+    "MULTI": [("🎰 Multi en 7", 7, 4, None, "33 cas seulement, peu fiable"),
+              ("🎰 Multi en 6", 6, 4, None, "2 cas seulement, peu fiable")],
+}
+
 COLONNES_ORDRE = ["rang", "num", "nom", "cote", "victoire", "place"]
 
 
@@ -97,12 +120,107 @@ def feu(ordre):
     return "vert" if favori >= SEUIL_VERT else "orange" if favori >= SEUIL_ORANGE else "rouge"
 
 
+def corriger(p, coefficients):
+    if not coefficients or not 0 < p < 1:
+        return float(p)
+    a, b = coefficients
+    return float(1 / (1 + np.exp(-(a + b * np.log(p / (1 - p))))))
+
+
+def chances_favori(ordre):
+    """(gagner, être placé) du favori, corrigées : le calcul brut surestimait les grands favoris."""
+    f = ordre.iloc[0]
+    return (corriger(f["victoire"], PRONOSTICS["SIMPLE_GAGNANT"][0][3]),
+            corriger(f["place"], PRONOSTICS["SIMPLE_PLACE"][0][3]))
+
+
+def chance_selection(p, k, rangs):
+    """Chance que les k premiers chevaux estimés soient dans les « rangs » premiers (k <= rangs),
+    ou qu'ils contiennent ces premiers (k > rangs)."""
+    p, choisis = np.asarray(p, dtype=float), set(range(k))
+    if max(k, rangs) > len(p):
+        return 0.0
+    if k >= rangs:
+        issues = list(itertools.permutations(range(k), rangs))
+    else:
+        issues = [i for i in itertools.permutations(range(len(p)), rangs) if choisis <= set(i)]
+    indices, total = np.array(issues), np.ones(len(issues))
+    for rang, exposant in enumerate((1.0, LAMBDA_2E, LAMBDA_3E, LAMBDA_3E)[:rangs]):
+        poids = p ** exposant
+        total *= poids[indices[:, rang]] / (poids.sum() - poids[indices[:, :rang]].sum(axis=1))
+    return float(total.sum())
+
+
+def pronostics(ordre, offerts=None):
+    """Paris proposés sur la course dont la chance dépasse 30 %, du plus au moins probable.
+    offerts=None (course collée) : seuls les paris Simples sont sûrs d'exister."""
+    if ordre.empty:
+        return []
+    offerts = {"SIMPLE_PLACE", "SIMPLE_GAGNANT"} if not offerts else set(offerts)
+    resultat = []
+    for code, variantes in PRONOSTICS.items():
+        if code not in offerts:
+            continue
+        for nom, k, rangs, coefficients, bilan in variantes:
+            rangs = rangs or nombre_places(len(ordre))
+            if code == "SIMPLE_PLACE":
+                p = ordre.iloc[0]["place"]
+            else:
+                p = chance_selection(ordre["victoire"], k, rangs)
+            p = corriger(p, coefficients)
+            if p > SEUIL_PRONOSTIC:
+                resultat.append({"code": code, "pari": nom, "chevaux": " - ".join(ordre["num"].head(k)),
+                                 "chance": p, "bilan": bilan})
+    return sorted(resultat, key=lambda x: x["chance"], reverse=True)
+
+
+def mise_conseillee(couleur, budget, deja_mise, paris_du_jour=0):
+    """Plafond conseillé pour un pari. 0 : passer (course rouge, budget épuisé, 3 paris déjà faits)."""
+    part, reste = PART_BUDGET.get(couleur, 0.0), budget - deja_mise
+    if not part or reste < MISE_MINI or paris_du_jour >= PARIS_PAR_JOUR:
+        return 0.0
+    return float(np.floor(min(max(budget * part, MISE_MINI), MISE_MAXI, reste) * 2) / 2)
+
+
+def conseiller(ordre, budget, deja_mise, paris_du_jour=0, offerts=None):
+    """Le conseil d'une course : le favori en Simple Placé, ou passer."""
+    couleur = feu(ordre)
+    if couleur is None:
+        return None
+    mise, raison = 0.0, ""
+    if offerts and "SIMPLE_PLACE" not in offerts:
+        raison = "Le Simple Placé n'est pas proposé sur cette course."
+    elif couleur == "rouge":
+        raison = "Course trop ouverte : le favori placé y perd 22 % de la mise en moyenne."
+    elif paris_du_jour >= PARIS_PAR_JOUR:
+        raison = f"Déjà {PARIS_PAR_JOUR} paris notés aujourd'hui : c'est le maximum conseillé."
+    else:
+        mise = mise_conseillee(couleur, budget, deja_mise)
+        if not mise:
+            raison = "Votre budget des 7 jours ne permet plus de pari."
+    return {"num": ordre.iloc[0]["num"], "nom": ordre.iloc[0]["nom"], "chance": chances_favori(ordre)[1],
+            "mise": mise, "cout": mise * PERTE_PLACE[couleur], "raison": raison}
+
+
+def repartir(lignes, budget, deja_mise, paris_du_jour=0):
+    """Ajoute une mise conseillée aux courses les mieux classées, dans le budget et 3 paris par jour."""
+    resultat, total, nombre = [], deja_mise, paris_du_jour
+    for x in lignes:
+        permis = not x["offerts"] or "SIMPLE_PLACE" in x["offerts"]
+        mise = mise_conseillee(x["feu"], budget, total, nombre) if permis else 0.0
+        if mise:
+            total, nombre = total + mise, nombre + 1
+        resultat.append({**x, "mise": mise, "cout": mise * PERTE_PLACE[x["feu"]]})
+    return resultat
+
+
 def chances_trio(ordre):
     """(dans le désordre, dans l'ordre exact) pour les 3 premiers estimés ; None sous 8 partants."""
     if len(ordre) < 8:
         return None
     issues = podiums(ordre["victoire"], 3)
-    return sum(issues[i] for i in itertools.permutations(range(3))), issues[(0, 1, 2)]
+    desordre = sum(issues[i] for i in itertools.permutations(range(3)))
+    return corriger(desordre, PRONOSTICS["TRIO"][0][3]), issues[(0, 1, 2)]
 
 
 def risque_pari(chance, cote, mise):
@@ -116,7 +234,7 @@ def risque_pari(chance, cote, mise):
 
 
 def cribler(jour, maintenant, programme, lire_partants):
-    """Courses françaises qui ne sont pas encore parties, de la plus claire à la plus ouverte."""
+    """Courses françaises qui ne sont pas encore parties, classées par prédiction (favori placé)."""
     lignes = []
     for c in programme:
         if c["pays"] != "FRA" or c["statut"] != "à venir" or pmu.depart_passe(c, jour, maintenant):
@@ -127,8 +245,9 @@ def cribler(jour, maintenant, programme, lire_partants):
             continue
         couleur = feu(ordre)
         if couleur:
-            f = ordre.iloc[0]
+            f, (gagne, place) = ordre.iloc[0], chances_favori(ordre)
             lignes.append({"course": c["id"], "heure": c["heure"], "hippodrome": c["hippodrome"], "feu": couleur,
-                           "favori": f"n° {f['num']} {f['nom']}", "victoire": float(f["victoire"]),
-                           "place": float(f["place"]), "partants": len(ordre)})
-    return sorted(lignes, key=lambda x: x["victoire"], reverse=True)
+                           "favori": f"n° {f['num']} {f['nom']}", "victoire": gagne, "place": place,
+                           "partants": len(ordre), "offerts": c.get("paris") or [],
+                           "pronostics": pronostics(ordre, c.get("paris"))})
+    return sorted(lignes, key=lambda x: x["place"], reverse=True)

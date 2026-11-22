@@ -27,7 +27,7 @@ def message(lignes, maintenant):
         return f"{entete}\nAucune course à afficher.\n{avertissement}"
     compte = " · ".join(f"{f['emoji']} {sum(x['feu'] == c for x in lignes)}" for c, f in decision.FEUX.items())
     corps = [f"{decision.FEUX[x['feu']]['emoji']} {x['heure']} {x['course']} {escape(x['hippodrome'])} : favori "
-             f"{escape(x['favori'])}, {x['victoire']:.0%} de gagner" for x in lignes[:MAX_COURSES]]
+             f"{escape(x['favori'])}, {x['place']:.0%} d'être placé" for x in lignes[:MAX_COURSES]]
     return "\n".join([entete, compte, *corps, avertissement])
 
 

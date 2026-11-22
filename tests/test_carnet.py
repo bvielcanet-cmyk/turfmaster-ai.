@@ -38,4 +38,5 @@ def test_budget_un_gain_ne_l_agrandit_pas():
     t["gain_reel"] = [90.0, 0, 10, 0]
     assert carnet.mise_semaine(t, pd.Timestamp("2026-11-22 12:00")) == 30
     assert carnet.mise_semaine(t, pd.Timestamp("2026-11-30 12:00")) == 0
+    assert carnet.nombre_du_jour(t, pd.Timestamp("2026-11-21").date()) == 3
     assert carnet.bilan(t) == {"n": 2, "attente": 1, "gagnes": 1, "mise": 20, "rendu": 90, "net": 70}
